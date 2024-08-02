@@ -27,27 +27,22 @@
 #include <glib/gi18n-lib.h>
 
 /**
- * SECTION:secret-collection
- * @title: SecretCollection
- * @short_description: A collection of secret items
+ * SecretCollection:
+ *
+ * A proxy object representing a collection of secrets in the Secret Service.
  *
  * #SecretCollection represents a collection of secret items stored in the
  * Secret Service.
  *
- * A collection can be in a locked or unlocked state. Use secret_service_lock()
- * or secret_service_unlock() to lock or unlock the collection.
+ * A collection can be in a locked or unlocked state. Use
+ * [method@SecretService.lock] or [method@SecretService.unlock] to lock or
+ * unlock the collection.
  *
- * Use the SecretCollection::items property or secret_collection_get_items() to
- * lookup the items in the collection. There may not be any items exposed when
- * the collection is locked.
+ * Use the [property@SecretCollection:items] property or
+ * [method@SecretCollection.get_items] to lookup the items in the collection.
+ * There may not be any items exposed when the collection is locked.
  *
  * Stability: Stable
- */
-
-/**
- * SecretCollection:
- *
- * A proxy object representing a collection of secrets in the Secret Service.
  */
 
 /**
@@ -69,22 +64,25 @@
  * SecretCollectionCreateFlags:
  * @SECRET_COLLECTION_CREATE_NONE: no flags
  *
- * Flags for secret_collection_create().
+ * Flags for [func@Collection.create].
  */
 
 /**
  * SECRET_COLLECTION_DEFAULT:
  *
- * An alias to the default collection. This can be passed to secret_password_store()
- * secret_collection_for_alias().
+ * An alias to the default collection.
+ *
+ * This can be passed to [func@password_store] [func@Collection.for_alias].
  */
 
 /**
  * SECRET_COLLECTION_SESSION:
  *
  * An alias to the session collection, which will be cleared when the user ends
- * the session. This can be passed to secret_password_store(),
- * secret_collection_for_alias() or similar functions.
+ * the session.
+ *
+ * This can be passed to [func@password_store], [func@Collection.for_alias] or
+ * similar functions.
  */
 
 enum {
@@ -429,9 +427,9 @@ secret_collection_class_init (SecretCollectionClass *klass)
 	proxy_class->g_signal = secret_collection_signal;
 
 	/**
-	 * SecretCollection:service:
+	 * SecretCollection:service: (attributes org.gtk.Property.get=secret_collection_get_service)
 	 *
-	 * The #SecretService object that this collection is associated with and
+	 * The [class@Service] object that this collection is associated with and
 	 * uses to interact with the actual D-Bus Secret Service.
 	 */
 	g_object_class_install_property (gobject_class, PROP_SERVICE,
@@ -439,7 +437,7 @@ secret_collection_class_init (SecretCollectionClass *klass)
 	                                 SECRET_TYPE_SERVICE, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * SecretCollection:flags:
+	 * SecretCollection:flags: (attributes org.gtk.Property.get=secret_collection_get_flags)
 	 *
 	 * A set of flags describing which parts of the secret collection have
 	 * been initialized.
@@ -450,9 +448,9 @@ secret_collection_class_init (SecretCollectionClass *klass)
 	                                 G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * SecretCollection:items:
+	 * SecretCollection:items: (attributes org.gtk.Property.get=secret_collection_get_items)
 	 *
-	 * A list of #SecretItem objects representing the items that are in
+	 * A list of [class@Item] objects representing the items that are in
 	 * this collection. This list will be empty if the collection is locked.
 	 */
 	g_object_class_install_property (gobject_class, PROP_ITEMS,
@@ -460,32 +458,32 @@ secret_collection_class_init (SecretCollectionClass *klass)
 	                                 _secret_list_get_type (), G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * SecretCollection:label:
+	 * SecretCollection:label: (attributes org.gtk.Property.get=secret_collection_get_label org.gtk.Property.set=secret_collection_set_label)
 	 *
 	 * The human readable label for the collection.
 	 *
 	 * Setting this property will result in the label of the collection being
 	 * set asynchronously. To properly track the changing of the label use the
-	 * secret_collection_set_label() function.
+	 * [method@Collection.set_label] function.
 	 */
 	g_object_class_install_property (gobject_class, PROP_LABEL,
 	            g_param_spec_string ("label", "Label", "Item label",
 	                                 NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * SecretCollection:locked:
+	 * SecretCollection:locked: (attributes org.gtk.Property.get=secret_collection_get_locked)
 	 *
 	 * Whether the collection is locked or not.
 	 *
-	 * To lock or unlock a collection use the secret_service_lock() or
-	 * secret_service_unlock() functions.
+	 * To lock or unlock a collection use the [method@Service.lock] or
+	 * [method@Service.unlock] functions.
 	 */
 	g_object_class_install_property (gobject_class, PROP_LOCKED,
 	           g_param_spec_boolean ("locked", "Locked", "Item locked",
 	                                 TRUE, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * SecretCollection:created:
+	 * SecretCollection:created: (attributes org.gtk.Property.get=secret_collection_get_created)
 	 *
 	 * The date and time (in seconds since the UNIX epoch) that this
 	 * collection was created.
@@ -495,7 +493,7 @@ secret_collection_class_init (SecretCollectionClass *klass)
 	                                 0UL, G_MAXUINT64, 0UL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 	/**
-	 * SecretCollection:modified:
+	 * SecretCollection:modified: (attributes org.gtk.Property.get=secret_collection_get_modified)
 	 *
 	 * The date and time (in seconds since the UNIX epoch) that this
 	 * collection was last modified.
@@ -569,50 +567,39 @@ secret_collection_initable_iface (GInitableIface *iface)
 	iface->init = secret_collection_initable_init;
 }
 
-typedef struct {
-	GCancellable *cancellable;
-} InitClosure;
-
-static void
-init_closure_free (gpointer data)
-{
-	InitClosure *closure = data;
-	g_clear_object (&closure->cancellable);
-	g_slice_free (InitClosure, closure);
-}
-
 static void
 on_ensure_items (GObject *source,
                  GAsyncResult *result,
                  gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
+	GTask *task = G_TASK (user_data);
 	SecretCollection *self = SECRET_COLLECTION (source);
 	GError *error = NULL;
 
 	if (!secret_collection_load_items_finish (self, result, &error))
-		g_simple_async_result_take_error (res, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_pointer (task, self, g_object_unref);
 
-	g_simple_async_result_complete (res);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
 collection_ensure_for_flags_async (SecretCollection *self,
                                    SecretCollectionFlags flags,
-                                   GCancellable *cancellable,
-                                   GSimpleAsyncResult *async)
+                                   GTask *task)
 {
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretCollectionFlags want_flags;
 
 	want_flags = flags & ~secret_collection_get_flags (self);
 
 	if (want_flags & SECRET_COLLECTION_LOAD_ITEMS) {
 		secret_collection_load_items (self, cancellable,
-		                              on_ensure_items, g_object_ref (async));
+		                              on_ensure_items, g_object_ref (task));
 
 	} else {
-		g_simple_async_result_complete (async);
+		g_task_return_pointer (task, self, g_object_unref);
 	}
 }
 
@@ -621,59 +608,71 @@ on_init_service (GObject *source,
                  GAsyncResult *result,
                  gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SecretCollection *self = SECRET_COLLECTION (g_async_result_get_source_object (user_data));
-	InitClosure *init = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SecretCollection *self = SECRET_COLLECTION (g_task_get_source_object (task));
 	SecretService *service;
 	GError *error = NULL;
 
 	service = secret_service_get_finish (result, &error);
 	if (error == NULL) {
-		collection_take_service (self, service);
-		collection_ensure_for_flags_async (self, self->pv->init_flags,
-		                                   init->cancellable, async);
+		collection_take_service (self, g_steal_pointer (&service));
+		collection_ensure_for_flags_async (self, self->pv->init_flags, task);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (self);
-	g_object_unref (async);
+	g_clear_object (&task);
 }
+
+typedef struct {
+	GAsyncReadyCallback callback;
+	gpointer user_data;
+} InitBaseClosure;
+
+static void
+secret_collection_async_initable_init_async (GAsyncInitable *initable,
+                                             int io_priority,
+                                             GCancellable *cancellable,
+                                             GAsyncReadyCallback callback,
+                                             gpointer user_data);
 
 static void
 on_init_base (GObject *source,
               GAsyncResult *result,
               gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
+	GTask *base_task = G_TASK (user_data);
+	InitBaseClosure *base = g_task_get_task_data (base_task);
+	GCancellable *cancellable = g_task_get_cancellable (base_task);
+	GTask *task;
 	SecretCollection *self = SECRET_COLLECTION (source);
-	InitClosure *init = g_simple_async_result_get_op_res_gpointer (res);
 	GDBusProxy *proxy = G_DBUS_PROXY (self);
 	GError *error = NULL;
 
+	task = g_task_new (source, cancellable, base->callback, base->user_data);
+	g_task_set_source_tag (task, secret_collection_async_initable_init_async);
+	g_clear_object (&base_task);
+
 	if (!secret_collection_async_initable_parent_iface->init_finish (G_ASYNC_INITABLE (self),
 	                                                                 result, &error)) {
-		g_simple_async_result_take_error (res, error);
-		g_simple_async_result_complete (res);
+		g_task_return_error (task, g_steal_pointer (&error));
 
 	} else if (!_secret_util_have_cached_properties (proxy)) {
-		g_simple_async_result_set_error (res, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,
-		                                 "No such secret collection at path: %s",
-		                                 g_dbus_proxy_get_object_path (proxy));
-		g_simple_async_result_complete (res);
+		g_task_return_new_error (task, G_DBUS_ERROR,
+		                         G_DBUS_ERROR_UNKNOWN_METHOD,
+		                         "No such secret collection at path: %s",
+		                         g_dbus_proxy_get_object_path (proxy));
 
 	} else if (self->pv->service == NULL) {
-		secret_service_get (SECRET_SERVICE_NONE, init->cancellable,
-		                    on_init_service, g_object_ref (res));
+		secret_service_get (SECRET_SERVICE_NONE, cancellable,
+		                    on_init_service, g_steal_pointer (&task));
 
 	} else {
-		collection_ensure_for_flags_async (self, self->pv->init_flags,
-		                                   init->cancellable, res);
+		collection_ensure_for_flags_async (self, self->pv->init_flags, task);
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -683,21 +682,24 @@ secret_collection_async_initable_init_async (GAsyncInitable *initable,
                                              GAsyncReadyCallback callback,
                                              gpointer user_data)
 {
-	GSimpleAsyncResult *res;
-	InitClosure *closure;
+	GTask *task;
+	InitBaseClosure *base;
 
-	res = g_simple_async_result_new (G_OBJECT (initable), callback, user_data,
-	                                 secret_collection_async_initable_init_async);
-	closure = g_slice_new0 (InitClosure);
-	closure->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
-	g_simple_async_result_set_op_res_gpointer (res, closure, init_closure_free);
+	task = g_task_new (initable, cancellable, NULL, NULL);
+	g_task_set_source_tag (task, secret_collection_async_initable_init_async);
 
-	secret_collection_async_initable_parent_iface->init_async (initable, io_priority,
+	base = g_new0 (InitBaseClosure, 1);
+	base->callback = callback;
+	base->user_data = user_data;
+	g_task_set_task_data (task, base, g_free);
+
+	secret_collection_async_initable_parent_iface->init_async (initable,
+	                                                           io_priority,
 	                                                           cancellable,
 	                                                           on_init_base,
-	                                                           g_object_ref (res));
+	                                                           g_steal_pointer (&task));
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static gboolean
@@ -707,11 +709,13 @@ secret_collection_async_initable_init_finish (GAsyncInitable *initable,
 {
 	SecretCollection *self = SECRET_COLLECTION (initable);
 
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (initable),
-	                      secret_collection_async_initable_init_async), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, initable), FALSE);
 
-	if (_secret_util_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+	// XXX maybe we still need to ref?
+	if (!g_task_propagate_pointer (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return FALSE;
+	}
 
 	self->pv->constructing = FALSE;
 	return TRUE;
@@ -727,7 +731,6 @@ secret_collection_async_initable_iface (GAsyncInitableIface *iface)
 }
 
 typedef struct {
-	GCancellable *cancellable;
 	GHashTable *items;
 	gint items_loading;
 } ItemsClosure;
@@ -736,9 +739,8 @@ static void
 items_closure_free (gpointer data)
 {
 	ItemsClosure *closure = data;
-	g_clear_object (&closure->cancellable);
 	g_hash_table_unref (closure->items);
-	g_slice_free (ItemsClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -746,9 +748,9 @@ on_load_item (GObject *source,
               GAsyncResult *result,
               gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	ItemsClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
-	SecretCollection *self = SECRET_COLLECTION (g_async_result_get_source_object (user_data));
+	GTask *task = G_TASK (user_data);
+	ItemsClosure *closure = g_task_get_task_data (task);
+	SecretCollection *self = SECRET_COLLECTION (g_task_get_source_object (task));
 	const gchar *path;
 	GError *error = NULL;
 	SecretItem *item;
@@ -757,8 +759,11 @@ on_load_item (GObject *source,
 
 	item = secret_item_new_for_dbus_path_finish (result, &error);
 
-	if (error != NULL)
-		g_simple_async_result_take_error (res, error);
+	if (error != NULL) {
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_clear_object (&task);
+		return;
+	}
 
 	if (item != NULL) {
 		path = g_dbus_proxy_get_object_path (G_DBUS_PROXY (item));
@@ -767,26 +772,26 @@ on_load_item (GObject *source,
 
 	if (closure->items_loading == 0) {
 		collection_update_items (self, closure->items);
-		g_simple_async_result_complete_in_idle (res);
+		g_task_return_boolean (task, TRUE);
 	}
 
-	g_object_unref (self);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 /**
  * secret_collection_load_items:
  * @self: the secret collection
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
  * Ensure that the #SecretCollection proxy has loaded all the items present
- * in the Secret Service. This affects the result of
- * secret_collection_get_items().
+ * in the Secret Service.
  *
- * For collections returned from secret_service_get_collections() the items
- * will have already been loaded.
+ * This affects the result of [method@Collection.get_items].
+ *
+ * For collections returned from [method@Service.get_collections] the items will
+ * have already been loaded.
  *
  * This method will return immediately and complete asynchronously.
  */
@@ -798,7 +803,7 @@ secret_collection_load_items (SecretCollection *self,
 {
 	ItemsClosure *closure;
 	SecretItem *item;
-	GSimpleAsyncResult *res;
+	GTask *task;
 	const gchar *path;
 	GVariant *paths;
 	GVariantIter iter;
@@ -809,12 +814,11 @@ secret_collection_load_items (SecretCollection *self,
 	paths = g_dbus_proxy_get_cached_property (G_DBUS_PROXY (self), "Items");
 	g_return_if_fail (paths != NULL);
 
-	res = g_simple_async_result_new (G_OBJECT (self), callback, user_data,
-	                                 secret_collection_load_items);
-	closure = g_slice_new0 (ItemsClosure);
-	closure->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	task = g_task_new (self, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_collection_load_items);
+	closure = g_new0 (ItemsClosure, 1);
 	closure->items = items_table_new ();
-	g_simple_async_result_set_op_res_gpointer (res, closure, items_closure_free);
+	g_task_set_task_data (task, closure, items_closure_free);
 
 	g_variant_iter_init (&iter, paths);
 	while (g_variant_iter_loop (&iter, "&o", &path)) {
@@ -822,8 +826,10 @@ secret_collection_load_items (SecretCollection *self,
 
 		/* No such collection yet create a new one */
 		if (item == NULL) {
-			secret_item_new_for_dbus_path (self->pv->service, path, SECRET_ITEM_NONE,
-			                               cancellable, on_load_item, g_object_ref (res));
+			secret_item_new_for_dbus_path (self->pv->service, path,
+			                               SECRET_ITEM_NONE,
+			                               cancellable, on_load_item,
+			                               g_object_ref (task));
 			closure->items_loading++;
 
 		} else {
@@ -833,11 +839,11 @@ secret_collection_load_items (SecretCollection *self,
 
 	if (closure->items_loading == 0) {
 		collection_update_items (self, closure->items);
-		g_simple_async_result_complete_in_idle (res);
+		g_task_return_boolean (task, TRUE);
 	}
 
 	g_variant_unref (paths);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 /**
@@ -858,11 +864,12 @@ secret_collection_load_items_finish (SecretCollection *self,
 {
 	g_return_val_if_fail (SECRET_IS_COLLECTION (self), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (self),
-	                      secret_collection_load_items), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, self), FALSE);
 
-	if (_secret_util_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return FALSE;
+	}
 
 	return TRUE;
 }
@@ -870,14 +877,14 @@ secret_collection_load_items_finish (SecretCollection *self,
 /**
  * secret_collection_load_items_sync:
  * @self: the secret collection
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Ensure that the #SecretCollection proxy has loaded all the items present
  * in the Secret Service. This affects the result of
- * secret_collection_get_items().
+ * [method@Collection.get_items].
  *
- * For collections returned from secret_service_get_collections() the items
+ * For collections returned from [method@Service.get_collections] the items
  * will have already been loaded.
  *
  * This method may block indefinitely and should not be used in user interface
@@ -953,7 +960,6 @@ secret_collection_refresh (SecretCollection *self)
 }
 
 typedef struct {
-	GCancellable *cancellable;
 	SecretCollection *collection;
 	GHashTable *properties;
 	gchar *alias;
@@ -964,11 +970,10 @@ static void
 create_closure_free (gpointer data)
 {
 	CreateClosure *closure = data;
-	g_clear_object (&closure->cancellable);
 	g_clear_object (&closure->collection);
 	g_hash_table_unref (closure->properties);
 	g_free (closure->alias);
-	g_slice_free (CreateClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -976,16 +981,17 @@ on_create_collection (GObject *source,
                       GAsyncResult *result,
                       gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	CreateClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	SecretCollection *collection;
 	GError *error = NULL;
 
-	closure->collection = secret_collection_new_for_dbus_path_finish (result, &error);
+	collection = secret_collection_new_for_dbus_path_finish (result, &error);
 	if (error != NULL)
-		g_simple_async_result_take_error (res, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_pointer (task, collection, g_object_unref);
 
-	g_simple_async_result_complete (res);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -993,8 +999,8 @@ on_create_path (GObject *source,
                 GAsyncResult *result,
                 gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	CreateClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretService *service = SECRET_SERVICE (source);
 	GError *error = NULL;
 	gchar *path;
@@ -1002,15 +1008,14 @@ on_create_path (GObject *source,
 	path = secret_service_create_collection_dbus_path_finish (service, result, &error);
 	if (error == NULL) {
 		secret_collection_new_for_dbus_path (service, path, SECRET_COLLECTION_LOAD_ITEMS,
-		                                     closure->cancellable,
-		                                     on_create_collection, g_object_ref (res));
+		                                     cancellable, on_create_collection,
+		                                     g_steal_pointer (&task));
 	} else {
-		g_simple_async_result_take_error (res, error);
-		g_simple_async_result_complete (res);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (res);
 	g_free (path);
+	g_clear_object (&task);
 }
 
 static void
@@ -1018,8 +1023,9 @@ on_create_service (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	CreateClosure *create = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	CreateClosure *create = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	SecretService *service;
 
@@ -1027,16 +1033,15 @@ on_create_service (GObject *source,
 	if (error == NULL) {
 		secret_service_create_collection_dbus_path (service, create->properties,
 		                                            create->alias, create->flags,
-		                                            create->cancellable,
-		                                            on_create_path, g_object_ref (async));
+		                                            cancellable, on_create_path,
+		                                            g_steal_pointer (&task));
 		g_object_unref (service);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 GHashTable *
@@ -1057,18 +1062,18 @@ _secret_collection_properties_new (const gchar *label)
 
 /**
  * secret_collection_create:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @label: label for the new collection
- * @alias: (allow-none): alias to assign to the collection
+ * @alias: (nullable): alias to assign to the collection
  * @flags: currently unused
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
  * Create a new collection in the secret service.
  *
  * This method returns immediately and completes asynchronously. The secret
- * service may prompt the user. secret_service_prompt() will be used to handle
+ * service may prompt the user. [method@Service.prompt] will be used to handle
  * any prompts that are required.
  *
  * An @alias is a well-known tag for a collection, such as 'default' (ie: the
@@ -1077,9 +1082,8 @@ _secret_collection_properties_new (const gchar *label)
  * collection with that alias already exists, then a new collection will not
  * be created. The previous one will be returned instead.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
- *
+ * If @service is %NULL, then [func@Service.get] will be called to get the
+ * default [class@Service] proxy.
  */
 void
 secret_collection_create (SecretService *service,
@@ -1090,34 +1094,33 @@ secret_collection_create (SecretService *service,
                           GAsyncReadyCallback callback,
                           gpointer user_data)
 {
-	GSimpleAsyncResult *res;
+	GTask *task;
 	CreateClosure *closure;
 
 	g_return_if_fail (service == NULL || SECRET_IS_SERVICE (service));
 	g_return_if_fail (label != NULL);
 	g_return_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable));
 
-	res = g_simple_async_result_new (NULL, callback, user_data,
-	                                 secret_collection_create);
-	closure = g_slice_new0 (CreateClosure);
-	closure->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	task = g_task_new (NULL, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_collection_create);
+	closure = g_new0 (CreateClosure, 1);
 	closure->properties = _secret_collection_properties_new (label);
 	closure->alias = g_strdup (alias);
 	closure->flags = flags;
-	g_simple_async_result_set_op_res_gpointer (res, closure, create_closure_free);
+	g_task_set_task_data (task, closure, create_closure_free);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_NONE, cancellable,
-		                    on_create_service, g_object_ref (res));
+		                    on_create_service, g_steal_pointer (&task));
 
 	} else {
 		secret_service_create_collection_dbus_path (service, closure->properties,
 		                                            closure->alias, closure->flags,
-		                                            closure->cancellable,
-		                                            on_create_path, g_object_ref (res));
+		                                            cancellable, on_create_path,
+		                                            g_steal_pointer (&task));
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 /**
@@ -1128,57 +1131,52 @@ secret_collection_create (SecretService *service,
  * Finish operation to create a new collection in the secret service.
  *
  * Returns: (transfer full): the new collection, which should be unreferenced
- *          with g_object_unref()
+ *   with [method@GObject.Object.unref]
  */
 SecretCollection *
 secret_collection_create_finish (GAsyncResult *result,
                                  GError **error)
 {
-	GSimpleAsyncResult *res;
-	CreateClosure *closure;
+	SecretCollection *collection;
 
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, NULL,
-	                      secret_collection_create), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, NULL), NULL);
 	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-	res = G_SIMPLE_ASYNC_RESULT (result);
-
-	if (_secret_util_propagate_error (res, error))
+	collection = g_task_propagate_pointer (G_TASK (result), error);
+	if (!collection) {
+		_secret_util_strip_remote_error (error);
 		return NULL;
+	}
 
-	closure = g_simple_async_result_get_op_res_gpointer (res);
-	if (closure->collection == NULL)
-		return NULL;
-
-	return g_object_ref (closure->collection);
+	return collection;
 }
 
 /**
  * secret_collection_create_sync:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @label: label for the new collection
- * @alias: (allow-none): alias to assign to the collection
+ * @alias: (nullable): alias to assign to the collection
  * @flags: currently unused
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Create a new collection in the secret service.
  *
  * This method may block indefinitely and should not be used in user interface
- * threads. The secret service may prompt the user. secret_service_prompt()
+ * threads. The secret service may prompt the user. [method@Service.prompt]
  * will be used to handle any prompts that are required.
  *
- * An @alias is a well-known tag for a collection, such as 'default' (ie: the
+ * An @alias is a well-known tag for a collection, such as `default` (ie: the
  * default collection to store items in). This allows other applications to
  * easily identify and share a collection. If you specify an @alias, and a
  * collection with that alias already exists, then a new collection will not
  * be created. The previous one will be returned instead.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get the
+ * default [class@Service] proxy.
  *
  * Returns: (transfer full): the new collection, which should be unreferenced
- *          with g_object_unref()
+ *   with [method@GObject.Object.unref]
  */
 SecretCollection *
 secret_collection_create_sync (SecretService *service,
@@ -1229,7 +1227,6 @@ secret_collection_create_sync (SecretService *service,
 
 typedef struct {
 	SecretCollection *collection;
-	GCancellable *cancellable;
 	GHashTable *items;
 	gchar **paths;
 	guint loading;
@@ -1241,10 +1238,9 @@ search_closure_free (gpointer data)
 {
 	SearchClosure *closure = data;
 	g_object_unref (closure->collection);
-	g_clear_object (&closure->cancellable);
 	g_hash_table_unref (closure->items);
 	g_strfreev (closure->paths);
-	g_slice_free (SearchClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -1260,13 +1256,13 @@ on_search_secrets (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
+	GTask *task = G_TASK (user_data);
 
 	/* Note that we ignore any unlock failure */
 	secret_item_load_secrets_finish (result, NULL);
 
-	g_simple_async_result_complete (async);
-	g_object_unref (async);
+	g_task_return_boolean (task, TRUE);
+	g_clear_object (&task);
 }
 
 static void
@@ -1274,8 +1270,9 @@ on_search_unlocked (GObject *source,
                     GAsyncResult *result,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *search = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SearchClosure *search = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GList *items;
 
 	/* Note that we ignore any unlock failure */
@@ -1284,42 +1281,43 @@ on_search_unlocked (GObject *source,
 	/* If loading secrets ... locked items automatically ignored */
 	if (search->flags & SECRET_SEARCH_LOAD_SECRETS) {
 		items = g_hash_table_get_values (search->items);
-		secret_item_load_secrets (items, search->cancellable,
-		                          on_search_secrets, g_object_ref (async));
+		secret_item_load_secrets (items, cancellable,
+		                          on_search_secrets, g_object_ref (task));
 		g_list_free (items);
 
 	/* No additional options, just complete */
 	} else {
-		g_simple_async_result_complete (async);
+		g_task_return_boolean (task, TRUE);
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
-secret_search_unlock_load_or_complete (GSimpleAsyncResult *async,
+secret_search_unlock_load_or_complete (GTask *task,
                                        SearchClosure *search)
 {
 	GList *items;
+	GCancellable *cancellable = g_task_get_cancellable (task);
 
 	/* If unlocking then unlock all the locked items */
 	if (search->flags & SECRET_SEARCH_UNLOCK) {
 		items = g_hash_table_get_values (search->items);
 		secret_service_unlock (secret_collection_get_service (search->collection),
-		                       items, search->cancellable,
-		                       on_search_unlocked, g_object_ref (async));
+		                       items, cancellable,
+		                       on_search_unlocked, g_object_ref (task));
 		g_list_free (items);
 
 	/* If loading secrets ... locked items automatically ignored */
 	} else if (search->flags & SECRET_SEARCH_LOAD_SECRETS) {
 		items = g_hash_table_get_values (search->items);
-		secret_item_load_secrets (items, search->cancellable,
-		                          on_search_secrets, g_object_ref (async));
+		secret_item_load_secrets (items, cancellable,
+		                          on_search_secrets, g_object_ref (task));
 		g_list_free (items);
 
 	/* No additional options, just complete */
 	} else {
-		g_simple_async_result_complete (async);
+		g_task_return_boolean (task, TRUE);
 	}
 }
 
@@ -1328,25 +1326,28 @@ on_search_loaded (GObject *source,
                   GAsyncResult *result,
                   gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *search = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SearchClosure *search = g_task_get_task_data (task);
 	GError *error = NULL;
 	SecretItem *item;
 
 	search->loading--;
 
 	item = secret_item_new_for_dbus_path_finish (result, &error);
-	if (error != NULL)
-		g_simple_async_result_take_error (async, error);
+	if (error != NULL) {
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_clear_object (&task);
+		return;
+	}
 
 	if (item != NULL)
 		search_closure_take_item (search, item);
 
 	/* We're done loading, lets go to the next step */
 	if (search->loading == 0)
-		secret_search_unlock_load_or_complete (async, search);
+		secret_search_unlock_load_or_complete (task, search);
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -1354,8 +1355,9 @@ on_search_paths (GObject *source,
                  GAsyncResult *result,
                  gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *search = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SearchClosure *search = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretCollection *self = search->collection;
 	SecretService *service = secret_collection_get_service (self);
 	GError *error = NULL;
@@ -1364,43 +1366,43 @@ on_search_paths (GObject *source,
 	gint i;
 
 	search->paths = secret_collection_search_for_dbus_paths_finish (self, result, &error);
-	if (error == NULL) {
-		want = 1;
-		if (search->flags & SECRET_SEARCH_ALL)
-			want = G_MAXINT;
-
-		for (i = 0; i < want && search->paths[i] != NULL; i++) {
-			item = _secret_collection_find_item_instance (self, search->paths[i]);
-			if (item == NULL) {
-				secret_item_new_for_dbus_path (service, search->paths[i], SECRET_ITEM_NONE,
-				                               search->cancellable, on_search_loaded,
-				                               g_object_ref (async));
-				search->loading++;
-			} else {
-				search_closure_take_item (search, item);
-			}
-
-		}
-
-		/* No items loading, complete operation now */
-		if (search->loading == 0)
-			secret_search_unlock_load_or_complete (async, search);
-
-	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+	if (error != NULL) {
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_clear_object (&task);
+		return;
 	}
 
-	g_object_unref (async);
+	want = 1;
+	if (search->flags & SECRET_SEARCH_ALL)
+		want = G_MAXINT;
+
+	for (i = 0; i < want && search->paths[i] != NULL; i++) {
+		item = _secret_collection_find_item_instance (self, search->paths[i]);
+		if (item == NULL) {
+			secret_item_new_for_dbus_path (service, search->paths[i], SECRET_ITEM_NONE,
+			                               cancellable, on_search_loaded,
+			                               g_object_ref (task));
+			search->loading++;
+		} else {
+			search_closure_take_item (search, item);
+		}
+
+	}
+
+	/* No items loading, complete operation now */
+	if (search->loading == 0)
+		secret_search_unlock_load_or_complete (task, search);
+
+	g_clear_object (&task);
 }
 
 /**
  * secret_collection_search:
  * @self: a secret collection
- * @schema: (allow-none): the schema for the attributes
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): search for items matching these attributes
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
@@ -1416,7 +1418,7 @@ on_search_paths (GObject *source,
  * search and be returned. If the unlock fails, the search does not fail.
  *
  * If %SECRET_SEARCH_LOAD_SECRETS is set in @flags, then the items will have
- * their secret values loaded and available via secret_item_get_secret().
+ * their secret values loaded and available via [method@Item.get_secret].
  *
  * This function returns immediately and completes asynchronously.
  */
@@ -1429,7 +1431,7 @@ secret_collection_search (SecretCollection *self,
                           GAsyncReadyCallback callback,
                           gpointer user_data)
 {
-	GSimpleAsyncResult *async;
+	GTask *task;
 	SearchClosure *search;
 
 	g_return_if_fail (SECRET_IS_COLLECTION (self));
@@ -1440,20 +1442,19 @@ secret_collection_search (SecretCollection *self,
 	if (schema != NULL && !_secret_attributes_validate (schema, attributes, G_STRFUNC, TRUE))
 		return;
 
-	async = g_simple_async_result_new (G_OBJECT (self), callback, user_data,
-	                                   secret_collection_search);
-	search = g_slice_new0 (SearchClosure);
+	task = g_task_new (self, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_collection_search);
+	search = g_new0 (SearchClosure, 1);
 	search->collection = g_object_ref (self);
-	search->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
 	search->items = g_hash_table_new_full (g_str_hash, g_str_equal, NULL, g_object_unref);
 	search->flags = flags;
-	g_simple_async_result_set_op_res_gpointer (async, search, search_closure_free);
+	g_task_set_task_data (task, search, search_closure_free);
 
 	secret_collection_search_for_dbus_paths (self, schema, attributes,
 	                                         cancellable, on_search_paths,
-	                                         g_object_ref (async));
+	                                         g_steal_pointer (&task));
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
@@ -1465,14 +1466,13 @@ secret_collection_search (SecretCollection *self,
  * Complete asynchronous operation to search for items in a collection.
  *
  * Returns: (transfer full) (element-type Secret.Item):
- *          a list of items that matched the search
+ *   a list of items that matched the search
  */
 GList *
 secret_collection_search_finish (SecretCollection *self,
                                  GAsyncResult *result,
                                  GError **error)
 {
-	GSimpleAsyncResult *async;
 	SearchClosure *search;
 	GList *items = NULL;
 	SecretItem *item;
@@ -1480,14 +1480,14 @@ secret_collection_search_finish (SecretCollection *self,
 
 	g_return_val_if_fail (SECRET_IS_COLLECTION (self), NULL);
 	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (self),
-	                      secret_collection_search), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, self), NULL);
 
-	async = G_SIMPLE_ASYNC_RESULT (result);
-	if (_secret_util_propagate_error (async, error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return NULL;
+	}
 
-	search = g_simple_async_result_get_op_res_gpointer (async);
+	search = g_task_get_task_data (G_TASK (result));
 
 	for (i = 0; search->paths[i]; i++) {
 		item = g_hash_table_lookup (search->items, search->paths[i]);
@@ -1531,10 +1531,10 @@ collection_load_items_sync (SecretCollection *self,
 /**
  * secret_collection_search_sync:
  * @self: a secret collection
- * @schema: (allow-none): the schema for the attributes
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): search for items matching these attributes
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place error on failure
  *
  * Search for items matching the @attributes in the @collection.
@@ -1549,13 +1549,13 @@ collection_load_items_sync (SecretCollection *self,
  * search and be returned. If the unlock fails, the search does not fail.
  *
  * If %SECRET_SEARCH_LOAD_SECRETS is set in @flags, then the items will have
- * their secret values loaded and available via secret_item_get_secret().
+ * their secret values loaded and available via [method@Item.get_secret].
  *
  * This function may block indefinitely. Use the asynchronous version
  * in user interface threads.
  *
  * Returns: (transfer full) (element-type Secret.Item):
- *          a list of items that matched the search
+ *   a list of items that matched the search
  */
 GList *
 secret_collection_search_sync (SecretCollection *self,
@@ -1582,8 +1582,6 @@ secret_collection_search_sync (SecretCollection *self,
 	                                                      cancellable, error);
 	if (paths == NULL)
 		return NULL;
-
-	ret = TRUE;
 
 	want = 1;
 	if (flags & SECRET_SEARCH_ALL)
@@ -1613,26 +1611,29 @@ on_service_delete_path (GObject *source,
                         GAsyncResult *result,
                         gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
+	GTask *task = G_TASK (user_data);
 	GError *error = NULL;
 
 	_secret_service_delete_path_finish (SECRET_SERVICE (source), result, &error);
 	if (error != NULL)
-		g_simple_async_result_take_error (async, error);
-	g_simple_async_result_complete (async);
-	g_object_unref (async);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_boolean (task, TRUE);
+
+	g_clear_object (&task);
 }
+
 /**
  * secret_collection_delete:
  * @self: a collection
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
  * Delete this collection.
  *
  * This method returns immediately and completes asynchronously. The secret
- * service may prompt the user. secret_service_prompt() will be used to handle
+ * service may prompt the user. [method@Service.prompt] will be used to handle
  * any prompts that show up.
  */
 void
@@ -1641,21 +1642,21 @@ secret_collection_delete (SecretCollection *self,
                           GAsyncReadyCallback callback,
                           gpointer user_data)
 {
-	GSimpleAsyncResult *async;
+	GTask *task;
 	const gchar *object_path;
 
 	g_return_if_fail (SECRET_IS_COLLECTION (self));
 	g_return_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable));
 
-	async = g_simple_async_result_new (G_OBJECT (self), callback, user_data,
-	                                   secret_collection_delete);
+	task = g_task_new (self, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_collection_delete);
 
 	object_path = g_dbus_proxy_get_object_path (G_DBUS_PROXY (self));
 	_secret_service_delete_path (self->pv->service, object_path, FALSE,
 	                             cancellable, on_service_delete_path,
-	                             g_object_ref (async));
+	                             g_steal_pointer (&task));
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
@@ -1675,11 +1676,12 @@ secret_collection_delete_finish (SecretCollection *self,
 {
 	g_return_val_if_fail (SECRET_IS_COLLECTION (self), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (self),
-	                      secret_collection_delete), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, self), FALSE);
 
-	if (_secret_util_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return FALSE;
+	}
 
 	return TRUE;
 }
@@ -1687,14 +1689,14 @@ secret_collection_delete_finish (SecretCollection *self,
 /**
  * secret_collection_delete_sync:
  * @self: a collection
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Delete this collection.
  *
- * This method may block indefinitely and should not be used in user
- * interface threads. The secret service may prompt the user.
- * secret_service_prompt() will be used to handle any prompts that show up.
+ * This method may block indefinitely and should not be used in user interface
+ * threads. The secret service may prompt the user. [method@Service.prompt] will
+ * be used to handle any prompts that show up.
  *
  * Returns: whether the collection was successfully deleted or not
  */
@@ -1726,7 +1728,7 @@ secret_collection_delete_sync (SecretCollection *self,
 }
 
 /**
- * secret_collection_get_service:
+ * secret_collection_get_service: (attributes org.gtk.Method.get_property=service)
  * @self: a collection
  *
  * Get the Secret Service object that this collection was created with.
@@ -1741,14 +1743,14 @@ secret_collection_get_service (SecretCollection *self)
 }
 
 /**
- * secret_collection_get_flags:
+ * secret_collection_get_flags: (attributes org.gtk.Method.get_property=flags)
  * @self: the secret collection proxy
  *
  * Get the flags representing what features of the #SecretCollection proxy
  * have been initialized.
  *
- * Use secret_collection_load_items()  to initialize further features
- * and change the flags.
+ * Use [method@Collection.load_items] to initialize further features and change
+ * the flags.
  *
  * Returns: the flags for features initialized
  */
@@ -1770,14 +1772,14 @@ secret_collection_get_flags (SecretCollection *self)
 }
 
 /**
- * secret_collection_get_items:
+ * secret_collection_get_items: (attributes org.gtk.Method.get_property=items)
  * @self: a collection
  *
  * Get the list of items in this collection.
  *
- * Returns: (transfer full) (element-type Secret.Item): a list of items,
- * when done, the list should be freed with g_list_free, and each item should
- * be released with g_object_unref()
+ * Returns: (transfer full) (element-type Secret.Item): a list of items, when
+ *   done, the list should be freed with [func@GLib.List.free], and each item
+ *   should be released with [method@GObject.Object.unref]
  */
 GList *
 secret_collection_get_items (SecretCollection *self)
@@ -1813,12 +1815,13 @@ _secret_collection_find_item_instance (SecretCollection *self,
 }
 
 /**
- * secret_collection_get_label:
+ * secret_collection_get_label: (attributes org.gtk.Method.get_property=label)
  * @self: a collection
  *
  * Get the label of this collection.
  *
- * Returns: (transfer full): the label, which should be freed with g_free()
+ * Returns: (transfer full): the label, which should be freed with
+ *   [func@GLib.free]
  */
 gchar *
 secret_collection_get_label (SecretCollection *self)
@@ -1838,10 +1841,10 @@ secret_collection_get_label (SecretCollection *self)
 }
 
 /**
- * secret_collection_set_label:
+ * secret_collection_set_label: (attributes org.gtk.Method.set_property=label)
  * @self: a collection
  * @label: a new label
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
@@ -1891,7 +1894,7 @@ secret_collection_set_label_finish (SecretCollection *self,
  * secret_collection_set_label_sync:
  * @self: a collection
  * @label: a new label
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place error on failure
  *
  * Set the label of this collection.
@@ -1916,12 +1919,12 @@ secret_collection_set_label_sync (SecretCollection *self,
 }
 
 /**
- * secret_collection_get_locked:
+ * secret_collection_get_locked: (attributes org.gtk.Method.get_property=locked)
  * @self: a collection
  *
  * Get whether the collection is locked or not.
  *
- * Use secret_service_lock() or secret_service_unlock() to lock or unlock the
+ * Use [method@Service.lock] or [method@Service.unlock] to lock or unlock the
  * collection.
  *
  * Returns: whether the collection is locked or not
@@ -1944,11 +1947,13 @@ secret_collection_get_locked (SecretCollection *self)
 }
 
 /**
- * secret_collection_get_created:
+ * secret_collection_get_created: (attributes org.gtk.Method.get_property=created)
  * @self: a collection
  *
- * Get the created date and time of the collection. The return value is
- * the number of seconds since the unix epoch, January 1st 1970.
+ * Get the created date and time of the collection.
+ *
+ * The return value is the number of seconds since the unix epoch, January 1st
+ * 1970.
  *
  * Returns: the created date and time
  */
@@ -1970,11 +1975,13 @@ secret_collection_get_created (SecretCollection *self)
 }
 
 /**
- * secret_collection_get_modified:
+ * secret_collection_get_modified: (attributes org.gtk.Method.get_property=modified)
  * @self: a collection
  *
- * Get the modified date and time of the collection. The return value is
- * the number of seconds since the unix epoch, January 1st 1970.
+ * Get the modified date and time of the collection.
+ *
+ * The return value is the number of seconds since the unix epoch, January 1st
+ * 1970.
  *
  * Returns: the modified date and time
  */
@@ -1997,10 +2004,8 @@ secret_collection_get_modified (SecretCollection *self)
 
 
 typedef struct {
-	GCancellable *cancellable;
 	gchar *alias;
 	SecretCollectionFlags flags;
-	SecretCollection *collection;
 } ReadClosure;
 
 static void
@@ -2008,11 +2013,7 @@ read_closure_free (gpointer data)
 {
 	ReadClosure *read = data;
 	g_free (read->alias);
-	if (read->collection)
-		g_object_unref (read->collection);
-	if (read->cancellable)
-		g_object_unref (read->cancellable);
-	g_slice_free (ReadClosure, read);
+	g_free (read);
 }
 
 static void
@@ -2020,16 +2021,17 @@ on_read_alias_collection (GObject *source,
                           GAsyncResult *result,
                           gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	ReadClosure *read = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SecretCollection *collection;
 	GError *error = NULL;
 
-	read->collection = secret_collection_new_for_dbus_path_finish (result, &error);
+	collection = secret_collection_new_for_dbus_path_finish (result, &error);
 	if (error != NULL)
-		g_simple_async_result_take_error (async, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_pointer (task, collection, g_object_unref);
 
-	g_simple_async_result_complete (async);
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -2037,8 +2039,9 @@ on_read_alias_path (GObject *source,
                     GAsyncResult *result,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	ReadClosure *read = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	ReadClosure *read = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretService *self = SECRET_SERVICE (source);
 	GError *error = NULL;
 	gchar *collection_path;
@@ -2048,34 +2051,35 @@ on_read_alias_path (GObject *source,
 
 		/* No collection for this alias */
 		if (collection_path == NULL) {
-			g_simple_async_result_complete (async);
+			g_task_return_pointer (task, NULL, NULL);
 
 		} else {
-			read->collection = _secret_service_find_collection_instance (self,
-			                                                             collection_path);
-			if (read->collection != NULL) {
+			SecretCollection *collection;
 
+			collection = _secret_service_find_collection_instance (self,
+			                                                       collection_path);
+			if (collection != NULL) {
 				/* Make sure collection has necessary flags */
-				collection_ensure_for_flags_async (read->collection, read->flags,
-				                                   read->cancellable, async);
+				collection_ensure_for_flags_async (collection,
+				                                   read->flags,
+				                                   task);
 
 			/* No collection loaded, but valid path, load */
 			} else {
 				secret_collection_new_for_dbus_path (self, collection_path,
 				                                     read->flags,
-				                                     read->cancellable,
+				                                     cancellable,
 				                                     on_read_alias_collection,
-				                                     g_object_ref (async));
+				                                     g_steal_pointer (&task));
 			}
 		}
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
 	g_free (collection_path);
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -2083,39 +2087,40 @@ on_read_alias_service (GObject *source,
                        GAsyncResult *result,
                        gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	ReadClosure *read = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	ReadClosure *read = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretService *service;
 	GError *error = NULL;
 
 	service = secret_service_get_finish (result, &error);
 	if (error == NULL) {
-		secret_service_read_alias_dbus_path (service, read->alias, read->cancellable,
-		                                     on_read_alias_path, g_object_ref (async));
+		secret_service_read_alias_dbus_path (service, read->alias, cancellable,
+		                                     on_read_alias_path,
+		                                     g_steal_pointer (&task));
 		g_object_unref (service);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_collection_for_alias:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @alias: the alias to lookup
  * @flags: options for the collection initialization
- * @cancellable: (allow-none): optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
  * Lookup which collection is assigned to this alias. Aliases help determine
  * well known collections, such as 'default'.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get] will be called to get the
+ * default [class@Service] proxy.
  *
  * This method will return immediately and complete asynchronously.
  */
@@ -2127,30 +2132,30 @@ secret_collection_for_alias (SecretService *service,
                              GAsyncReadyCallback callback,
                              gpointer user_data)
 {
-	GSimpleAsyncResult *async;
+	GTask *task;
 	ReadClosure *read;
 
 	g_return_if_fail (service == NULL || SECRET_IS_SERVICE (service));
 	g_return_if_fail (alias != NULL);
 	g_return_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable));
 
-	async = g_simple_async_result_new (NULL, callback, user_data,
-	                                   secret_collection_for_alias);
-	read = g_slice_new0 (ReadClosure);
-	read->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	task = g_task_new (NULL, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_collection_for_alias);
+	read = g_new0 (ReadClosure, 1);
 	read->alias = g_strdup (alias);
 	read->flags = flags;
-	g_simple_async_result_set_op_res_gpointer (async, read, read_closure_free);
+	g_task_set_task_data (task, read, read_closure_free);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_NONE, cancellable,
-		                    on_read_alias_service, g_object_ref (async));
+		                    on_read_alias_service, g_object_ref (task));
 	} else {
-		secret_service_read_alias_dbus_path (service, read->alias, read->cancellable,
-		                                     on_read_alias_path, g_object_ref (async));
+		secret_service_read_alias_dbus_path (service, read->alias, cancellable,
+		                                     on_read_alias_path,
+		                                     g_steal_pointer (&task));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
@@ -2161,45 +2166,43 @@ secret_collection_for_alias (SecretService *service,
  * Finish an asynchronous operation to lookup which collection is assigned
  * to an alias.
  *
- * Returns: (transfer full): the collection, or %NULL if none assigned to the alias
+ * Returns: (transfer full) (nullable): the collection, or %NULL if none assigned to the alias
  */
 SecretCollection *
 secret_collection_for_alias_finish (GAsyncResult *result,
                                     GError **error)
 {
-	GSimpleAsyncResult *async;
-	ReadClosure *read;
+	SecretCollection *collection;
 
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, NULL,
-	                      secret_collection_for_alias), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, NULL), NULL);
 	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
 
-	async = G_SIMPLE_ASYNC_RESULT (result);
-	if (_secret_util_propagate_error (async, error))
+	collection = g_task_propagate_pointer (G_TASK (result), error);
+	if (error && *error) {
+		_secret_util_strip_remote_error (error);
 		return NULL;
-	read = g_simple_async_result_get_op_res_gpointer (async);
-	if (read->collection)
-		g_object_ref (read->collection);
-	return read->collection;
+	}
+
+	return collection;
 }
 
 /**
  * secret_collection_for_alias_sync:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @alias: the alias to lookup
  * @flags: options for the collection initialization
- * @cancellable: (allow-none): optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place error on failure
  *
  * Lookup which collection is assigned to this alias. Aliases help determine
- * well known collections, such as 'default'.
+ * well known collections, such as `default`.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get the
+ * default [class@Service] proxy.
  *
  * This method may block and should not be used in user interface threads.
  *
- * Returns: (transfer full): the collection, or %NULL if none assigned to the alias
+ * Returns: (transfer full) (nullable): the collection, or %NULL if none assigned to the alias
  */
 SecretCollection *
 secret_collection_for_alias_sync (SecretService *service,

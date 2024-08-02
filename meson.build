@@ -1,5 +1,5 @@
 project('libsecret', 'c',
-  version: '0.20.4',
+  version: '0.21.4',
   license: 'GPL2+',
   meson_version: '>= 0.50',
 )
@@ -30,11 +30,42 @@ glib_deps = [
   dependency('gio-unix-2.0', version: '>=' + min_glib_version),
 ]
 
-min_libgcrypt_version = '1.2.2'
-gcrypt_dep = dependency('libgcrypt',
-  version: '>=' + min_libgcrypt_version,
-  required: get_option('gcrypt'),
-)
+with_gcrypt = false
+with_gnutls = false
+with_crypto = false
+
+crypto_deps = []
+
+if get_option('crypto') == 'libgcrypt'
+  min_libgcrypt_version = '1.2.2'
+  gcrypt_dep = dependency(
+    'libgcrypt',
+    version: '>=' + min_libgcrypt_version,
+  )
+  with_gcrypt = true
+  with_crypto = true
+  crypto_deps += gcrypt_dep
+elif get_option('crypto') == 'gnutls'
+  min_gnutls_version = '3.8.2'
+  gnutls_dep = dependency(
+    'gnutls',
+    version: '>=' + min_gnutls_version,
+  )
+  with_gnutls = true
+  with_crypto = true
+  crypto_deps += gnutls_dep
+endif
+
+min_tss2_version = '3.0.3'
+tss2_esys = dependency('tss2-esys', version: '>=' + min_tss2_version, required: get_option('tpm2'))
+tss2_mu = dependency('tss2-mu', version: '>=' + min_tss2_version, required: get_option('tpm2'))
+tss2_rc = dependency('tss2-rc', version: '>=' + min_tss2_version, required: get_option('tpm2'))
+tss2_tctildr = dependency('tss2-tctildr', version: '>=' + min_tss2_version, required: get_option('tpm2'))
+
+tss2_deps = []
+if tss2_esys.found() and tss2_mu.found() and tss2_rc.found() and tss2_tctildr.found()
+  tss2_deps += [tss2_esys, tss2_mu, tss2_rc, tss2_tctildr]
+endif
 
 # Libraries
 math = meson.get_compiler('c').find_library('m')
@@ -47,13 +78,23 @@ conf.set_quoted('LOCALEDIR', libsecret_prefix / get_option('localedir'))
 conf.set_quoted('PACKAGE_NAME', meson.project_name())
 conf.set_quoted('PACKAGE_STRING', meson.project_name())
 conf.set_quoted('PACKAGE_VERSION', meson.project_version())
-conf.set('WITH_GCRYPT', get_option('gcrypt'))
-if get_option('gcrypt')
+conf.set('WITH_GCRYPT', with_gcrypt)
+conf.set('WITH_GNUTLS', with_gnutls)
+conf.set('WITH_CRYPTO', with_crypto)
+conf.set('WITH_TPM', get_option('tpm2'))
+if with_gcrypt
   conf.set_quoted('LIBGCRYPT_VERSION', min_libgcrypt_version)
+endif
+if get_option('tpm2')
+  conf.set_quoted('TSS2_VERSION', min_tss2_version)
 endif
 conf.set('WITH_DEBUG', get_option('debugging'))
 conf.set('_DEBUG', get_option('debugging'))
 conf.set('HAVE_MLOCK', meson.get_compiler('c').has_function('mlock'))
+if get_option('pam')
+  conf.set_quoted('GNOME_KEYRING_DAEMON', get_option('prefix') /
+    get_option('bindir') / 'gnome-keyring-daemon')
+endif
 configure_file(output: 'config.h', configuration: conf)
 
 # Test environment
@@ -66,3 +107,6 @@ subdir('egg')
 subdir('libsecret')
 subdir('tool')
 subdir('docs')
+if get_option('pam')
+  subdir('pam')
+endif

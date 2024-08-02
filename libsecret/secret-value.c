@@ -22,32 +22,26 @@
 #include <string.h>
 
 /**
- * SECTION:secret-value
- * @title: SecretValue
- * @short_description: a value containing a secret
+ * SecretValue:
+ *
+ * A value containing a secret
  *
  * A #SecretValue contains a password or other secret value.
  *
- * Use secret_value_get() to get the actual secret data, such as a password.
+ * Use [method@Value.get] to get the actual secret data, such as a password.
  * The secret data is not necessarily null-terminated, unless the content type
  * is "text/plain".
  *
- * Each #SecretValue has a content type. For passwords, this is "text/plain".
- * Use secret_value_get_content_type() to look at the content type.
+ * Each #SecretValue has a content type. For passwords, this is `text/plain`.
+ * Use [method@Value.get_content_type] to look at the content type.
  *
  * #SecretValue is reference counted and immutable. The secret data is only
- * freed when all references have been released via secret_value_unref().
+ * freed when all references have been released via [method@Value.unref].
  *
  * Stability: Stable
  */
 
 static gboolean     is_password_value    (SecretValue *value);
-
-/**
- * SecretValue:
- *
- * A secret value, like a password or other binary secret.
- */
 
 EGG_SECURE_DECLARE (secret_value);
 
@@ -81,8 +75,9 @@ secret_value_get_type (void)
  * @length: the length of the data
  * @content_type: the content type of the data
  *
- * Create a #SecretValue for the secret data passed in. The secret data is
- * copied into non-pageable 'secure' memory.
+ * Create a #SecretValue for the secret data passed in.
+ *
+ * The secret data is copied into non-pageable 'secure' memory.
  *
  * If the length is less than zero, then @secret is assumed to be
  * null-terminated.
@@ -116,8 +111,10 @@ secret_value_new (const gchar *secret,
  * @content_type: the content type of the data
  * @destroy: function to call to free the secret data
  *
- * Create a #SecretValue for the secret data passed in. The secret data is
- * not copied, and will later be freed with the @destroy function.
+ * Create a #SecretValue for the secret data passed in.
+ *
+ * The secret data is not copied, and will later be freed with the @destroy
+ * function.
  *
  * If the length is less than zero, then @secret is assumed to be
  * null-terminated.
@@ -137,7 +134,7 @@ secret_value_new_full (gchar *secret,
 	if (length < 0)
 		length = strlen (secret);
 
-	value = g_slice_new0 (SecretValue);
+	value = g_new0 (SecretValue, 1);
 	value->refs = 1;
 	value->content_type = g_strdup (content_type);
 	value->destroy = destroy;
@@ -152,9 +149,11 @@ secret_value_new_full (gchar *secret,
  * @value: the value
  * @length: the length of the secret
  *
- * Get the secret data in the #SecretValue. The value is not necessarily
- * null-terminated unless it was created with secret_value_new() or a
- * null-terminated string was passed to secret_value_new_full().
+ * Get the secret data in the #SecretValue.
+ *
+ * The value is not necessarily null-terminated unless it was created with
+ * [ctor@Value.new] or a null-terminated string was passed to
+ * [ctor@Value.new_full].
  *
  * Returns: (array length=length) (element-type guint8): the secret data
  */
@@ -173,9 +172,11 @@ secret_value_get (SecretValue *value,
  * @value: the value
  *
  * Get the secret data in the #SecretValue if it contains a textual
- * value. The content type must be <literal>text/plain</literal>.
+ * value.
  *
- * Returns: (allow-none): the content type
+ * The content type must be `text/plain`.
+ *
+ * Returns: (nullable): the content type
  */
 const gchar *
 secret_value_get_text (SecretValue *value)
@@ -193,7 +194,7 @@ secret_value_get_text (SecretValue *value)
  * @value: the value
  *
  * Get the content type of the secret value, such as
- * <literal>text/plain</literal>.
+ * `text/plain`.
  *
  * Returns: the content type
  */
@@ -208,8 +209,10 @@ secret_value_get_content_type (SecretValue *value)
  * secret_value_ref:
  * @value: value to reference
  *
- * Add another reference to the #SecretValue. For each reference
- * secret_value_unref() should be called to unreference the value.
+ * Add another reference to the #SecretValue.
+ *
+ * For each reference [method@Value.unref] should be called to unreference the
+ * value.
  *
  * Returns: (transfer full): the value
  */
@@ -225,8 +228,9 @@ secret_value_ref (SecretValue *value)
  * secret_value_unref:
  * @value: (type Secret.Value): value to unreference
  *
- * Unreference a #SecretValue. When the last reference is gone, then
- * the value will be freed.
+ * Unreference a #SecretValue.
+ *
+ * When the last reference is gone, then the value will be freed.
  */
 void
 secret_value_unref (gpointer value)
@@ -239,7 +243,7 @@ secret_value_unref (gpointer value)
 		g_free (val->content_type);
 		if (val->destroy)
 			(val->destroy) (val->secret);
-		g_slice_free (SecretValue, val);
+		g_free (val);
 	}
 }
 
@@ -259,13 +263,13 @@ is_password_value (SecretValue *value)
 /**
  * secret_value_unref_to_password:
  * @value: the value
- * @length: the length of the secret
+ * @length: (inout): the length of the secret
  *
  * Unreference a #SecretValue and steal the secret data in
  * #SecretValue as nonpageable memory.
  *
  * Returns: (transfer full): a new password string stored in nonpageable memory
- *          which must be freed with secret_password_free() when done
+ *   which must be freed with [func@password_free] when done
  *
  * Since: 0.19.0
  */
@@ -292,7 +296,7 @@ secret_value_unref_to_password (SecretValue *value,
 				*length = val->length;
 		}
 		g_free (val->content_type);
-		g_slice_free (SecretValue, val);
+		g_free (val);
 
 	} else {
 		result = egg_secure_strndup (val->secret, val->length);
@@ -339,7 +343,7 @@ _secret_value_unref_to_string (SecretValue *value)
 				(val->destroy) (val->secret);
 		}
 		g_free (val->content_type);
-		g_slice_free (SecretValue, val);
+		g_free (val);
 
 	} else {
 		result = g_strndup (val->secret, val->length);

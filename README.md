@@ -9,15 +9,21 @@ methods so consumers do not have to call the low-level DBus methods.
 The actual Secret Service API spec can be found at
 https://specifications.freedesktop.org/secret-service/.
 
+Documentation
+--------
+
+You can find the nightly documentation at https://gnome.pages.gitlab.gnome.org/libsecret/.
+
 Building
 --------
 
-To build and install libsecret, you can use the following commands:
+To build, test and install libsecret, you can use the following commands:
 
 ```
-$ meson _build
-$ ninja -C _build
-$ ninja -C _build install
+$ meson setup _build
+$ meson compile -C _build
+$ meson test -C _build
+$ meson install -C _build
 ```
 
 Contributing

@@ -22,30 +22,24 @@
 #include <glib/gi18n-lib.h>
 
 /**
- * SECTION:secret-prompt
- * @title: SecretPrompt
- * @short_description: a prompt in the Service
+ * SecretPrompt:
  *
- * A #SecretPrompt represents a prompt in the Secret Service.
+ * A prompt in the Service
+ *
+ * A proxy object representing a prompt that the Secret Service will display
+ * to the user.
  *
  * Certain actions on the Secret Service require user prompting to complete,
  * such as creating a collection, or unlocking a collection. When such a prompt
  * is necessary, then a #SecretPrompt object is created by this library, and
- * passed to the secret_service_prompt() method. In this way it is handled
+ * passed to the [method@Service.prompt] method. In this way it is handled
  * automatically.
  *
  * In order to customize prompt handling, override the
- * SecretServiceClass::prompt_async and SecretServiceClass::prompt_finish
- * virtual methods of the #SecretService class.
+ * [vfunc@Service.prompt_async] and [vfunc@Service.prompt_finish] virtual
+ * methods of the [class@Service] class.
  *
  * Stability: Stable
- */
-
-/**
- * SecretPrompt:
- *
- * A proxy object representing a prompt that the Secret Service will display
- * to the user.
  */
 
 /**
@@ -120,21 +114,22 @@ _secret_prompt_instance (SecretService *service,
 /**
  * secret_prompt_run:
  * @self: a prompt
- * @window_id: (allow-none): string form of XWindow id for parent window to be transient for
- * @cancellable: optional cancellation object
+ * @window_id: (nullable): string form of XWindow id for parent window to be transient for
+ * @cancellable: (nullable): optional cancellation object
  * @return_type: the variant type of the prompt result
  * @error: location to place an error on failure
  *
- * Runs a prompt and performs the prompting. Returns a variant result if the
- * prompt was completed and not dismissed. The type of result depends on the
- * action the prompt is completing, and is defined in the Secret Service DBus
- * API specification.
+ * Runs a prompt and performs the prompting.
+ *
+ * Returns a variant result if the prompt was completed and not dismissed. The
+ * type of result depends on the action the prompt is completing, and is defined
+ * in the Secret Service DBus API specification.
  *
  * If @window_id is non-null then it is used as an XWindow id on Linux. The API
- * expects this id to be converted to a string using the <literal>%d</literal>
- * printf format. The Secret Service can make its prompt transient for the window
- * with this id. In some Secret Service implementations this is not possible, so
- * the behavior depending on this should degrade gracefully.
+ * expects this id to be converted to a string using the `%d` printf format. The
+ * Secret Service can make its prompt transient for the window with this id. In
+ * some Secret Service implementations this is not possible, so the behavior
+ * depending on this should degrade gracefully.
  *
  * This runs the dialog in a recursive mainloop. When run from a user interface
  * thread, this means the user interface will remain responsive. Care should be
@@ -180,21 +175,22 @@ secret_prompt_run (SecretPrompt *self,
 /**
  * secret_prompt_perform_sync:
  * @self: a prompt
- * @window_id: (allow-none): string form of XWindow id for parent window to be transient for
- * @cancellable: optional cancellation object
+ * @window_id: (nullable): string form of XWindow id for parent window to be transient for
+ * @cancellable: (nullable): optional cancellation object
  * @return_type: the variant type of the prompt result
  * @error: location to place an error on failure
  *
- * Runs a prompt and performs the prompting. Returns a variant result if the
- * prompt was completed and not dismissed. The type of result depends on the
- * action the prompt is completing, and is defined in the Secret Service DBus
- * API specification.
+ * Runs a prompt and performs the prompting.
+ *
+ * Returns a variant result if the prompt was completed and not dismissed. The
+ * type of result depends on the action the prompt is completing, and is defined
+ * in the Secret Service DBus API specification.
  *
  * If @window_id is non-null then it is used as an XWindow id on Linux. The API
- * expects this id to be converted to a string using the <literal>%d</literal>
- * printf format. The Secret Service can make its prompt transient for the window
- * with this id. In some Secret Service implementations this is not possible,
- * so the behavior depending on this should degrade gracefully.
+ * expects this id to be converted to a string using the `%d` printf format. The
+ * Secret Service can make its prompt transient for the window with this id. In
+ * some Secret Service implementations this is not possible, so the behavior
+ * depending on this should degrade gracefully.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
@@ -232,7 +228,6 @@ secret_prompt_perform_sync (SecretPrompt *self,
 typedef struct {
 	GDBusConnection *connection;
 	GCancellable *call_cancellable;
-	GCancellable *async_cancellable;
 	gulong cancelled_sig;
 	gboolean prompting;
 	gboolean dismissed;
@@ -249,7 +244,6 @@ perform_closure_free (gpointer data)
 {
 	PerformClosure *closure = data;
 	g_object_unref (closure->call_cancellable);
-	g_clear_object (&closure->async_cancellable);
 	g_object_unref (closure->connection);
 	if (closure->result)
 		g_variant_unref (closure->result);
@@ -257,15 +251,15 @@ perform_closure_free (gpointer data)
 		g_variant_type_free (closure->return_type);
 	g_assert (closure->signal == 0);
 	g_assert (closure->watch == 0);
-	g_slice_free (PerformClosure, closure);
+	g_free (closure);
 }
 
 static void
-perform_prompt_complete (GSimpleAsyncResult *res,
+perform_prompt_complete (GTask *task,
                          gboolean dismissed)
 {
-	PerformClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
-
+	PerformClosure *closure = g_task_get_task_data (task);
+	GCancellable *async_cancellable = g_task_get_cancellable (task);
 	closure->dismissed = dismissed;
 	if (closure->completed)
 		return;
@@ -280,10 +274,8 @@ perform_prompt_complete (GSimpleAsyncResult *res,
 	closure->watch = 0;
 
 	if (closure->cancelled_sig)
-		g_signal_handler_disconnect (closure->async_cancellable, closure->cancelled_sig);
+		g_signal_handler_disconnect (async_cancellable, closure->cancelled_sig);
 	closure->cancelled_sig = 0;
-
-	g_simple_async_result_complete (res);
 }
 
 static void
@@ -295,9 +287,8 @@ on_prompt_completed (GDBusConnection *connection,
                      GVariant *parameters,
                      gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	SecretPrompt *self = SECRET_PROMPT (g_async_result_get_source_object (user_data));
-	PerformClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	PerformClosure *closure = g_task_get_task_data (task);
 	gboolean dismissed;
 
 	closure->prompting = FALSE;
@@ -305,14 +296,14 @@ on_prompt_completed (GDBusConnection *connection,
 	if (!g_variant_is_of_type (parameters, G_VARIANT_TYPE ("(bv)"))) {
 		g_warning ("SecretPrompt received invalid %s signal of type %s",
 		           signal_name, g_variant_get_type_string (parameters));
-		perform_prompt_complete (res, TRUE);
+		perform_prompt_complete (task, TRUE);
+		g_task_return_boolean (task, TRUE);
 
 	} else {
 		g_variant_get (parameters, "(bv)", &dismissed, &closure->result);
-		perform_prompt_complete (res, dismissed);
+		perform_prompt_complete (task, dismissed);
+		g_task_return_boolean (task, TRUE);
 	}
-
-	g_object_unref (self);
 }
 
 static void
@@ -320,8 +311,8 @@ on_prompt_prompted (GObject *source,
                     GAsyncResult *result,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	PerformClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	PerformClosure *closure = g_task_get_task_data (task);
 	SecretPrompt *self = SECRET_PROMPT (source);
 	GError *error = NULL;
 	GVariant *retval;
@@ -334,8 +325,8 @@ on_prompt_prompted (GObject *source,
 		g_clear_error (&error);
 
 	if (error != NULL) {
-		g_simple_async_result_take_error (res, error);
-		perform_prompt_complete (res, TRUE);
+		g_task_return_error (task, g_steal_pointer (&error));
+		perform_prompt_complete (task, TRUE);
 
 	} else {
 		closure->prompting = TRUE;
@@ -344,7 +335,7 @@ on_prompt_prompted (GObject *source,
 		/* And now we wait for the signal */
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -352,11 +343,12 @@ on_prompt_vanished (GDBusConnection *connection,
                     const gchar *name,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	PerformClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	PerformClosure *closure = g_task_get_task_data (task);
 	closure->vanished = TRUE;
 	g_cancellable_cancel (closure->call_cancellable);
-	perform_prompt_complete (res, TRUE);
+	perform_prompt_complete (task, TRUE);
+	g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -364,8 +356,8 @@ on_prompt_dismissed (GObject *source,
                      GAsyncResult *result,
                      gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	PerformClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	PerformClosure *closure = g_task_get_task_data (task);
 	SecretPrompt *self = SECRET_PROMPT (source);
 	GError *error = NULL;
 	GVariant *retval;
@@ -380,48 +372,47 @@ on_prompt_dismissed (GObject *source,
 		g_clear_error (&error);
 
 	if (error != NULL) {
-		g_simple_async_result_take_error (res, error);
-		perform_prompt_complete (res, TRUE);
+		perform_prompt_complete (task, TRUE);
+		g_task_return_error (task, error);
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
 on_prompt_cancelled (GCancellable *cancellable,
                      gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	PerformClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
-	SecretPrompt *self = SECRET_PROMPT (g_async_result_get_source_object (user_data));
+	GTask *task = G_TASK (user_data);
+	SecretPrompt *self = SECRET_PROMPT (g_task_get_source_object (task));
+	PerformClosure *closure = g_task_get_task_data (task);
 
 	/* Instead of cancelling our dbus calls, we cancel the prompt itself via this dbus call */
 
 	g_dbus_proxy_call (G_DBUS_PROXY (self), "Dismiss", g_variant_new ("()"),
 	                   G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
 	                   closure->call_cancellable,
-	                   on_prompt_dismissed, g_object_ref (res));
-
-	g_object_unref (self);
+	                   on_prompt_dismissed, g_object_ref (task));
 }
 
 /**
  * secret_prompt_perform:
  * @self: a prompt
- * @window_id: (allow-none): string form of XWindow id for parent window to be transient for
+ * @window_id: (nullable): string form of XWindow id for parent window to be transient for
  * @return_type: the variant type of the prompt result
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
- * Runs a prompt and performs the prompting. Returns %TRUE if the prompt
- * was completed and not dismissed.
+ * Runs a prompt and performs the prompting.
+ *
+ * Returns %TRUE if the prompt was completed and not dismissed.
  *
  * If @window_id is non-null then it is used as an XWindow id on Linux. The API
- * expects this id to be converted to a string using the <literal>%d</literal>
- * printf format. The Secret Service can make its prompt transient for the window
- * with this id. In some Secret Service implementations this is not possible, so
- * the behavior depending on this should degrade gracefully.
+ * expects this id to be converted to a string using the `%d` printf format. The
+ * Secret Service can make its prompt transient for the window with this id. In
+ * some Secret Service implementations this is not possible, so the behavior
+ * depending on this should degrade gracefully.
  *
  * This method will return immediately and complete asynchronously.
  */
@@ -433,8 +424,9 @@ secret_prompt_perform (SecretPrompt *self,
                        GAsyncReadyCallback callback,
                        gpointer user_data)
 {
-	GSimpleAsyncResult *res;
+	GTask *task;
 	PerformClosure *closure;
+	GCancellable *async_cancellable;
 	gchar *owner_name;
 	const gchar *object_path;
 	gboolean prompted;
@@ -451,14 +443,16 @@ secret_prompt_perform (SecretPrompt *self,
 
 	proxy = G_DBUS_PROXY (self);
 
-	res = g_simple_async_result_new (G_OBJECT (self), callback, user_data,
-	                                 secret_prompt_perform);
-	closure = g_slice_new0 (PerformClosure);
+	task = g_task_new (self, cancellable, callback, user_data);
+	async_cancellable = g_task_get_cancellable (task);
+	g_task_set_source_tag (task, secret_prompt_perform);
+	closure = g_new0 (PerformClosure, 1);
 	closure->connection = g_object_ref (g_dbus_proxy_get_connection (proxy));
 	closure->call_cancellable = g_cancellable_new ();
-	closure->async_cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	async_cancellable = cancellable ? g_object_ref (cancellable) : NULL;
 	closure->return_type = return_type ? g_variant_type_copy (return_type) : NULL;
-	g_simple_async_result_set_op_res_gpointer (res, closure, perform_closure_free);
+	g_task_set_task_data (task, closure, perform_closure_free);
+	g_task_set_check_cancellable (task, FALSE);
 
 	if (window_id == NULL)
 		window_id = "";
@@ -472,26 +466,26 @@ secret_prompt_perform (SecretPrompt *self,
 	                                                      object_path, NULL,
 	                                                      G_DBUS_SIGNAL_FLAGS_NONE,
 	                                                      on_prompt_completed,
-	                                                      g_object_ref (res),
+	                                                      g_object_ref (task),
 	                                                      g_object_unref);
 
 	closure->watch = g_bus_watch_name_on_connection (closure->connection, owner_name,
 	                                                 G_BUS_NAME_WATCHER_FLAGS_NONE, NULL,
 	                                                 on_prompt_vanished,
-	                                                 g_object_ref (res),
+	                                                 g_object_ref (task),
 	                                                 g_object_unref);
 
-	if (closure->async_cancellable) {
-		closure->cancelled_sig = g_cancellable_connect (closure->async_cancellable,
+	if (async_cancellable) {
+		closure->cancelled_sig = g_cancellable_connect (async_cancellable,
 		                                                G_CALLBACK (on_prompt_cancelled),
-		                                                res, NULL);
+		                                                g_object_ref (task), g_object_unref);
 	}
 
 	g_dbus_proxy_call (proxy, "Prompt", g_variant_new ("(s)", window_id),
 	                   G_DBUS_CALL_FLAGS_NO_AUTO_START, -1,
-	                   closure->call_cancellable, on_prompt_prompted, g_object_ref (res));
+	                   closure->call_cancellable, on_prompt_prompted, g_object_ref (task));
 
-	g_object_unref (res);
+	g_clear_object (&task);
 	g_free (owner_name);
 }
 
@@ -508,7 +502,7 @@ secret_prompt_perform (SecretPrompt *self,
  * defined in the Secret Service DBus API specification.
  *
  * Returns: (transfer full): %NULL if the prompt was dismissed or an error occurred,
- *          a variant result if the prompt was successful
+ *   a variant result if the prompt was successful
  */
 GVariant *
 secret_prompt_perform_finish (SecretPrompt *self,
@@ -516,20 +510,19 @@ secret_prompt_perform_finish (SecretPrompt *self,
                               GError **error)
 {
 	PerformClosure *closure;
-	GSimpleAsyncResult *res;
 	gchar *string;
 
 	g_return_val_if_fail (SECRET_IS_PROMPT (self), NULL);
 	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (self),
-	                                                      secret_prompt_perform), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, self), NULL);
+	g_return_val_if_fail (g_task_get_source_tag (G_TASK (result)) == secret_prompt_perform, NULL);
 
-	res = G_SIMPLE_ASYNC_RESULT (result);
-
-	if (_secret_util_propagate_error (res, error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return NULL;
+	}
 
-	closure = g_simple_async_result_get_op_res_gpointer (res);
+	closure = g_task_get_task_data (G_TASK (result));
 	if (closure->result == NULL)
 		return NULL;
 	if (closure->return_type != NULL && !g_variant_is_of_type (closure->result, closure->return_type)) {

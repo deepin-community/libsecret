@@ -1,3 +1,74 @@
+libsecret (0.21.4-1) unstable; urgency=medium
+
+  * Team upload
+  * New upstream release
+    - 0.21.3
+      + Port PAM module from gnome-keyring
+        https://gitlab.gnome.org/GNOME/libsecret/-/merge_requests/128
+      + secret-tool: Fix memory issues in lock command
+        https://gitlab.gnome.org/GNOME/libsecret/-/merge_requests/134
+    - 0.21.4
+      + file-backend: Subscribe before calling dbus
+        https://gitlab.gnome.org/GNOME/libsecret/-/merge_requests/138
+      + meson: Fix crypto option being silently ignored
+        https://gitlab.gnome.org/GNOME/libsecret/-/merge_requests/137
+
+ -- Amin Bandali <bandali@ubuntu.com>  Tue, 27 Feb 2024 12:39:19 -0500
+
+libsecret (0.21.2-1) unstable; urgency=medium
+
+  * New upstream release
+  * debian/libsecret-1.0.symbols: Add new symbols
+  * Stop using debian/control.in and dh_gnome_clean
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Tue, 02 Jan 2024 15:17:37 -0500
+
+libsecret (0.21.1-1) unstable; urgency=medium
+
+  * New upstream bugfix release
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 20 Sep 2023 14:52:16 -0400
+
+libsecret (0.21.0-1) unstable; urgency=medium
+
+  [ Jeremy Bícha ]
+  * New upstream release
+  * Add armel back to the list of architectures that can run gjs tests
+
+  [ Debian Janitor ]
+  * Add debian/upstream/metadata
+  * Update standards version to 4.6.2, no changes needed
+  * Remove constraints unnecessary since buster (oldstable)
+
+ -- Jeremy Bícha <jbicha@ubuntu.com>  Wed, 16 Aug 2023 15:31:33 -0400
+
+libsecret (0.20.5-3) unstable; urgency=medium
+
+  * Team upload
+  * Update list of architectures that can run gjs-based tests
+    - Remove armel, which is likely to lose gjs support with the move to
+      mozjs102 (see #1018076)
+    - Add riscv64
+
+ -- Simon McVittie <smcv@debian.org>  Wed, 31 Aug 2022 11:05:48 +0100
+
+libsecret (0.20.5-2) unstable; urgency=medium
+
+  * Have libsecret-1-dev Depend on libgcrypt20-dev per its pkgconfig
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Wed, 23 Feb 2022 07:28:04 -0500
+
+libsecret (0.20.5-1) unstable; urgency=medium
+
+  * New upstream release
+    - The new TPM2 based secret storage is disabled by default in this release
+  * Build with meson
+  * Bump debhelper-compat to 13
+  * debian/control.in: Build-Depend on gi-docgen
+  * debian/rules: Set the timeout multipler to 6
+
+ -- Jeremy Bicha <jeremy.bicha@canonical.com>  Mon, 21 Feb 2022 11:00:19 -0500
+
 libsecret (0.20.4-2) unstable; urgency=medium
 
   * Team upload

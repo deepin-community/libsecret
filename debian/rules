@@ -2,38 +2,12 @@
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export DEB_LDFLAGS_MAINT_APPEND = -Wl,-O1 -Wl,-z,defs
+export DPKG_GENSYMBOLS_CHECK_LEVEL = 4
 
 %:
 	dh $@
 
-override_dh_auto_configure:
-	dh_auto_configure -- --enable-gtk-doc
-
-# We can't depend on gjs being available on s390x. See #909536
-# Also, some tests hang on Launchpad builders on s390x
-override_dh_autoreconf:
-ifeq (,$(filter $(DEB_HOST_ARCH),amd64 arm64 armel armhf i386 mips64el mipsel ppc64el s390x))
-	sed -i -e '/^TESTS/s/\$$(JS_TESTS)//' libsecret/Makefile.am
-endif
-ifeq (yes,$(shell dpkg-vendor --is Ubuntu && echo yes))
-ifneq (,$(filter $(DEB_HOST_ARCH),s390x))
-	sed -i -e '/^TESTS/s/\$$(PY_TESTS)//' -e '/^TESTS/s/\$$(VALA_TESTS)//' \
-		 libsecret/Makefile.am
-endif
-endif
-	dh_autoreconf --as-needed
-
-override_dh_install:
-	find debian/tmp -name '*.la' -print -delete
-	dh_install
-
-override_dh_missing:
-	dh_missing --fail-missing
-
-override_dh_makeshlibs:
-	dh_makeshlibs -- -c4
-
 override_dh_auto_test:
-ifeq (, $(filter nocheck, $(DEB_BUILD_OPTIONS)))
-	env -u LD_PRELOAD dbus-run-session -- dh_auto_test --no-parallel
-endif
+	env -u LD_PRELOAD dbus-run-session -- dh_auto_test -- --timeout-multiplier 6
+
+override_dh_gnome_clean:

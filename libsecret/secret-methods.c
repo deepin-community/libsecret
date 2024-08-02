@@ -33,12 +33,11 @@
  * @SECRET_SEARCH_UNLOCK: unlock locked items while searching
  * @SECRET_SEARCH_LOAD_SECRETS: while searching load secrets for items that are not locked
  *
- * Various flags to be used with secret_service_search() and secret_service_search_sync().
+ * Various flags to be used with [method@Service.search] and [method@Service.search_sync].
  */
 
 typedef struct {
 	SecretService *service;
-	GCancellable *cancellable;
 	GHashTable *items;
 	gchar **unlocked;
 	gchar **locked;
@@ -52,12 +51,11 @@ search_closure_free (gpointer data)
 {
 	SearchClosure *closure = data;
 	g_clear_object (&closure->service);
-	g_clear_object (&closure->cancellable);
 	g_hash_table_unref (closure->items);
 	g_variant_unref (closure->attributes);
 	g_strfreev (closure->unlocked);
 	g_strfreev (closure->locked);
-	g_slice_free (SearchClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -90,65 +88,32 @@ on_search_secrets (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
+	GTask *task = G_TASK (user_data);
 
 	/* Note that we ignore any unlock failure */
 	secret_item_load_secrets_finish (result, NULL);
+	g_task_return_boolean (task, TRUE);
 
-	g_simple_async_result_complete (async);
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
-on_search_unlocked (GObject *source,
-                    GAsyncResult *result,
-                    gpointer user_data)
+secret_search_load_or_complete (GTask *task,
+                                SearchClosure *search)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *search = g_simple_async_result_get_op_res_gpointer (async);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GList *items;
-
-	/* Note that we ignore any unlock failure */
-	secret_service_unlock_finish (search->service, result, NULL, NULL);
 
 	/* If loading secrets ... locked items automatically ignored */
 	if (search->flags & SECRET_SEARCH_LOAD_SECRETS) {
 		items = g_hash_table_get_values (search->items);
-		secret_item_load_secrets (items, search->cancellable,
-		                          on_search_secrets, g_object_ref (async));
+		secret_item_load_secrets (items, cancellable,
+		                          on_search_secrets, g_object_ref (task));
 		g_list_free (items);
 
 	/* No additional options, just complete */
 	} else {
-		g_simple_async_result_complete (async);
-	}
-
-	g_object_unref (async);
-}
-
-static void
-secret_search_unlock_load_or_complete (GSimpleAsyncResult *async,
-                                       SearchClosure *search)
-{
-	GList *items;
-
-	/* If unlocking then unlock all the locked items */
-	if (search->flags & SECRET_SEARCH_UNLOCK) {
-		items = search_closure_build_items (search, search->locked);
-		secret_service_unlock (search->service, items, search->cancellable,
-		                       on_search_unlocked, g_object_ref (async));
-		g_list_free_full (items, g_object_unref);
-
-	/* If loading secrets ... locked items automatically ignored */
-	} else if (search->flags & SECRET_SEARCH_LOAD_SECRETS) {
-		items = g_hash_table_get_values (search->items);
-		secret_item_load_secrets (items, search->cancellable,
-		                          on_search_secrets, g_object_ref (async));
-		g_list_free (items);
-
-	/* No additional options, just complete */
-	} else {
-		g_simple_async_result_complete (async);
+		g_task_return_boolean (task, TRUE);
 	}
 }
 
@@ -157,39 +122,43 @@ on_search_loaded (GObject *source,
                   GAsyncResult *result,
                   gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	SearchClosure *closure = g_task_get_task_data (task);
 	GError *error = NULL;
 	SecretItem *item;
 
 	closure->loading--;
 
 	item = secret_item_new_for_dbus_path_finish (result, &error);
-	if (error != NULL)
-		g_simple_async_result_take_error (res, error);
+	if (error != NULL) {
+		g_task_return_error (task, g_steal_pointer (&error));
+		g_clear_object (&task);
+		return;
+	}
 
 	if (item != NULL)
 		search_closure_take_item (closure, item);
 
 	/* We're done loading, lets go to the next step */
 	if (closure->loading == 0)
-		secret_search_unlock_load_or_complete (res, closure);
+		secret_search_load_or_complete (task, closure);
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
 search_load_item_async (SecretService *self,
-                        GSimpleAsyncResult *res,
+                        GTask *task,
                         SearchClosure *closure,
                         const gchar *path)
 {
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretItem *item;
 
 	item = _secret_service_find_item_instance (self, path);
 	if (item == NULL) {
-		secret_item_new_for_dbus_path (self, path, SECRET_ITEM_NONE, closure->cancellable,
-		                               on_search_loaded, g_object_ref (res));
+		secret_item_new_for_dbus_path (self, path, SECRET_ITEM_NONE, cancellable,
+		                               on_search_loaded, g_object_ref (task));
 		closure->loading++;
 	} else {
 		search_closure_take_item (closure, item);
@@ -197,41 +166,72 @@ search_load_item_async (SecretService *self,
 }
 
 static void
+load_items (SearchClosure *closure,
+            GTask *task)
+{
+	SecretService *self = closure->service;
+	gint want = 1;
+	gint count = 0;
+	gint i;
+
+	if (closure->flags & SECRET_SEARCH_ALL)
+		want = G_MAXINT;
+
+	for (i = 0; count < want && closure->unlocked[i] != NULL; i++, count++)
+		search_load_item_async (self, task, closure, closure->unlocked[i]);
+	for (i = 0; count < want && closure->locked[i] != NULL; i++, count++)
+		search_load_item_async (self, task, closure, closure->locked[i]);
+
+	/* No items loading, complete operation now */
+	if (closure->loading == 0)
+		secret_search_load_or_complete (task, closure);
+}
+
+static void
+on_unlock_paths (GObject *source,
+                 GAsyncResult *result,
+                 gpointer user_data)
+{
+	GTask *task = G_TASK (user_data);
+	SearchClosure *closure = g_task_get_task_data (task);
+	SecretService *self = closure->service;
+
+	/* Note that we ignore any unlock failure */
+	secret_service_unlock_dbus_paths_finish (self, result, NULL, NULL);
+
+	load_items (closure, task);
+	g_clear_object (&task);
+}
+
+static void
 on_search_paths (GObject *source,
                  GAsyncResult *result,
                  gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
+	SearchClosure *closure = g_task_get_task_data (task);
 	SecretService *self = closure->service;
 	GError *error = NULL;
-	gint want = 1;
-	gint count;
-	gint i;
 
 	secret_service_search_for_dbus_paths_finish (self, result, &closure->unlocked,
 	                                             &closure->locked, &error);
 	if (error == NULL) {
-		want = 1;
-		if (closure->flags & SECRET_SEARCH_ALL)
-			want = G_MAXINT;
-		count = 0;
+		/* If unlocking then unlock all the locked items */
+		if (closure->flags & SECRET_SEARCH_UNLOCK) {
+			GCancellable *cancellable = g_task_get_cancellable (task);
+			const gchar **const_locked = (const gchar**) closure->locked;
 
-		for (i = 0; count < want && closure->unlocked[i] != NULL; i++, count++)
-			search_load_item_async (self, res, closure, closure->unlocked[i]);
-		for (i = 0; count < want && closure->locked[i] != NULL; i++, count++)
-			search_load_item_async (self, res, closure, closure->locked[i]);
-
-		/* No items loading, complete operation now */
-		if (closure->loading == 0)
-			secret_search_unlock_load_or_complete (res, closure);
-
+			secret_service_unlock_dbus_paths (self, const_locked, cancellable,
+			                                  on_unlock_paths,
+			                                  g_steal_pointer (&task));
+		} else {
+			load_items (closure, task);
+		}
 	} else {
-		g_simple_async_result_take_error (res, error);
-		g_simple_async_result_complete (res);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -239,39 +239,41 @@ on_search_service (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SearchClosure *search = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SearchClosure *search = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 
 	search->service = secret_service_get_finish (result, &error);
 	if (error == NULL) {
 		_secret_service_search_for_paths_variant (search->service, search->attributes,
-		                                          search->cancellable, on_search_paths,
-		                                          g_object_ref (async));
+		                                          cancellable, on_search_paths,
+		                                          g_steal_pointer (&task));
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_search:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): search for items matching these attributes
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
- * Search for items matching the @attributes. All collections are searched.
- * The @attributes should be a table of string keys and string values.
+ * Search for items matching the @attributes.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * All collections are searched. The @attributes should be a table of string
+ * keys and string values.
+ *
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * If %SECRET_SEARCH_ALL is set in @flags, then all the items matching the
  * search will be returned. Otherwise only the first item will be returned.
@@ -282,7 +284,7 @@ on_search_service (GObject *source,
  * search and be returned. If the unlock fails, the search does not fail.
  *
  * If %SECRET_SEARCH_LOAD_SECRETS is set in @flags, then the items will have
- * their secret values loaded and available via secret_item_get_secret().
+ * their secret values loaded and available via [method@Item.get_secret].
  *
  * This function returns immediately and completes asynchronously.
  */
@@ -295,7 +297,7 @@ secret_service_search (SecretService *service,
                        GAsyncReadyCallback callback,
                        gpointer user_data)
 {
-	GSimpleAsyncResult *res;
+	GTask *task;
 	SearchClosure *closure;
 	const gchar *schema_name = NULL;
 
@@ -310,61 +312,58 @@ secret_service_search (SecretService *service,
 	if (schema != NULL && !(schema->flags & SECRET_SCHEMA_DONT_MATCH_NAME))
 		schema_name = schema->name;
 
-	res = g_simple_async_result_new (G_OBJECT (service), callback, user_data,
-	                                 secret_service_search);
-	closure = g_slice_new0 (SearchClosure);
-	closure->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	task = g_task_new (service, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_service_search);
+	closure = g_new0 (SearchClosure, 1);
 	closure->items = g_hash_table_new_full (g_str_hash, g_str_equal, NULL, g_object_unref);
 	closure->flags = flags;
 	closure->attributes = _secret_attributes_to_variant (attributes, schema_name);
 	g_variant_ref_sink (closure->attributes);
-	g_simple_async_result_set_op_res_gpointer (res, closure, search_closure_free);
+	g_task_set_task_data (task, closure, search_closure_free);
 
 	if (service) {
 		closure->service = g_object_ref (service);
 		_secret_service_search_for_paths_variant (closure->service, closure->attributes,
-		                                          closure->cancellable, on_search_paths,
-		                                          g_object_ref (res));
+		                                          cancellable, on_search_paths,
+		                                          g_steal_pointer (&task));
 
 	} else {
 		secret_service_get (SECRET_SERVICE_NONE, cancellable,
-		                    on_search_service, g_object_ref (res));
+		                    on_search_service, g_steal_pointer (&task));
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_search_finish:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @result: asynchronous result passed to callback
  * @error: location to place error on failure
  *
  * Complete asynchronous operation to search for items.
  *
  * Returns: (transfer full) (element-type Secret.Item):
- *          a list of items that matched the search
+ *   a list of items that matched the search
  */
 GList *
 secret_service_search_finish (SecretService *service,
                               GAsyncResult *result,
                               GError **error)
 {
-	GSimpleAsyncResult *res;
 	SearchClosure *closure;
 	GList *items = NULL;
 
 	g_return_val_if_fail (service == NULL || SECRET_IS_SERVICE (service), NULL);
 	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (service),
-	                      secret_service_search), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, service), NULL);
 
-	res = G_SIMPLE_ASYNC_RESULT (result);
-
-	if (_secret_util_propagate_error (res, error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return NULL;
+	}
 
-	closure = g_simple_async_result_get_op_res_gpointer (res);
+	closure = g_task_get_task_data (G_TASK (result));
 	if (closure->unlocked)
 		items = search_closure_build_items (closure, closure->unlocked);
 	if (closure->locked)
@@ -403,18 +402,20 @@ service_load_items_sync (SecretService *service,
 
 /**
  * secret_service_search_sync:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): search for items matching these attributes
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place error on failure
  *
- * Search for items matching the @attributes. All collections are searched.
- * The @attributes should be a table of string keys and string values.
+ * Search for items matching the @attributes.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * All collections are searched. The @attributes should be a table of string
+ * keys and string values.
+ *
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * If %SECRET_SEARCH_ALL is set in @flags, then all the items matching the
  * search will be returned. Otherwise only the first item will be returned.
@@ -426,14 +427,14 @@ service_load_items_sync (SecretService *service,
  *
  * If %SECRET_SEARCH_LOAD_SECRETS is set in @flags, then the items' secret
  * values will be loaded for any unlocked items. Loaded item secret values
- * are available via secret_item_get_secret(). If the load of a secret values
+ * are available via [method@Item.get_secret]. If the load of a secret values
  * fail, then the
  *
  * This function may block indefinitely. Use the asynchronous version
  * in user interface threads.
  *
  * Returns: (transfer full) (element-type Secret.Item):
- *          a list of items that matched the search
+ *   a list of items that matched the search
  */
 GList *
 secret_service_search_sync (SecretService *service,
@@ -474,6 +475,10 @@ secret_service_search_sync (SecretService *service,
 		return NULL;
 	}
 
+	if (flags & SECRET_SEARCH_UNLOCK)
+		secret_service_unlock_dbus_paths_sync (service, (const gchar**) locked_paths,
+						       cancellable, NULL, NULL);
+
 	ret = TRUE;
 
 	want = 1;
@@ -507,9 +512,6 @@ secret_service_search_sync (SecretService *service,
 	items = g_list_concat (items, g_list_copy (locked));
 	items = g_list_concat (items, g_list_copy (unlocked));
 	items = g_list_reverse (items);
-
-	if (flags & SECRET_SEARCH_UNLOCK)
-		secret_service_unlock_sync (service, locked, cancellable, NULL, NULL);
 
 	if (flags & SECRET_SEARCH_LOAD_SECRETS)
 		secret_item_load_secrets_sync (items, NULL, NULL);
@@ -566,11 +568,9 @@ _secret_service_decode_get_secrets_all (SecretService *self,
 }
 
 typedef struct {
-	GCancellable *cancellable;
 	GPtrArray *paths;
 	GHashTable *objects;
 	gchar **xlocked;
-	guint count;
 	gboolean locking;
 } XlockClosure;
 
@@ -578,12 +578,10 @@ static void
 xlock_closure_free (gpointer data)
 {
 	XlockClosure *closure = data;
-	if (closure->cancellable)
-		g_object_unref (closure->cancellable);
 	g_ptr_array_free (closure->paths, TRUE);
 	g_strfreev (closure->xlocked);
 	g_hash_table_unref (closure->objects);
-	g_slice_free (XlockClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -591,15 +589,17 @@ on_xlock_paths (GObject *source,
                 GAsyncResult *result,
                 gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	XlockClosure *xlock = g_simple_async_result_get_op_res_gpointer (async);
+	SecretService *service = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	XlockClosure *xlock = g_task_get_task_data (task);
 	GVariant *lockval;
 	GDBusProxy *object;
 	GError *error = NULL;
+	gint count;
 	gint i;
 
-	xlock->count = _secret_service_xlock_paths_finish (SECRET_SERVICE (source), result,
-	                                                   &xlock->xlocked, &error);
+	count = _secret_service_xlock_paths_finish (service, result,
+	                                            &xlock->xlocked, &error);
 
 	if (error == NULL) {
 		/*
@@ -615,13 +615,13 @@ on_xlock_paths (GObject *source,
 				g_dbus_proxy_set_cached_property (object, "Locked", lockval);
 		}
 		g_variant_unref (lockval);
+		g_task_return_int (task, count);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_simple_async_result_complete (async);
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -629,8 +629,9 @@ on_xlock_service (GObject *source,
                   GAsyncResult *result,
                   gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	XlockClosure *xlock = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	XlockClosure *xlock = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	SecretService *service;
 
@@ -638,16 +639,15 @@ on_xlock_service (GObject *source,
 	if (error == NULL) {
 		_secret_service_xlock_paths_async (service, xlock->locking ? "Lock" : "Unlock",
 		                                   (const gchar **)xlock->paths->pdata,
-		                                   xlock->cancellable, on_xlock_paths,
-		                                   g_object_ref (async));
+		                                   cancellable, on_xlock_paths,
+		                                   g_steal_pointer (&task));
 		g_object_unref (service);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -658,17 +658,16 @@ service_xlock_async (SecretService *service,
                      GAsyncReadyCallback callback,
                      gpointer user_data)
 {
-	GSimpleAsyncResult *async;
+	GTask *task;
 	XlockClosure *xlock;
 	const gchar *path;
 	GList *l;
 
-	async = g_simple_async_result_new (G_OBJECT (service), callback, user_data,
-	                                   service_xlock_async);
-	xlock = g_slice_new0 (XlockClosure);
+	task = g_task_new (service, cancellable, callback, user_data);
+	g_task_set_source_tag (task, service_xlock_async);
+	xlock = g_new0 (XlockClosure, 1);
 	xlock->objects = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_object_unref);
 	xlock->locking = locking;
-	xlock->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
 	xlock->paths = g_ptr_array_new ();
 
 	for (l = objects; l != NULL; l = g_list_next (l)) {
@@ -678,19 +677,19 @@ service_xlock_async (SecretService *service,
 	}
 	g_ptr_array_add (xlock->paths, NULL);
 
-	g_simple_async_result_set_op_res_gpointer (async, xlock, xlock_closure_free);
+	g_task_set_task_data (task, xlock, xlock_closure_free);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_NONE, cancellable,
-		                    on_xlock_service, g_object_ref (async));
+		                    on_xlock_service, g_steal_pointer (&task));
 	} else {
 		_secret_service_xlock_paths_async (service, xlock->locking ? "Lock" : "Unlock",
 		                                   (const gchar **)xlock->paths->pdata,
-		                                   xlock->cancellable, on_xlock_paths,
-		                                   g_object_ref (async));
+		                                   cancellable, on_xlock_paths,
+		                                   g_steal_pointer (&task));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static gint
@@ -699,19 +698,20 @@ service_xlock_finish (SecretService *service,
                       GList **xlocked,
                       GError **error)
 {
-	GSimpleAsyncResult *async;
 	XlockClosure *xlock;
 	GDBusProxy *object;
+	gint count;
 	gint i;
 
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (service),
-	                                                      service_xlock_async), -1);
+	g_return_val_if_fail (g_task_is_valid (result, service), -1);
 
-	async = G_SIMPLE_ASYNC_RESULT (result);
-	if (_secret_util_propagate_error (async, error))
+	count = g_task_propagate_int (G_TASK (result), error);
+	if (count == -1) {
+		_secret_util_strip_remote_error (error);
 		return -1;
+	}
 
-	xlock = g_simple_async_result_get_op_res_gpointer (async);
+	xlock = g_task_get_task_data (G_TASK (result));
 	if (xlocked) {
 		*xlocked = NULL;
 		for (i = 0; xlock->xlocked[i] != NULL; i++) {
@@ -721,14 +721,14 @@ service_xlock_finish (SecretService *service,
 		}
 	}
 
-	return xlock->count;
+	return count;
 }
 
 /**
  * secret_service_lock:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @objects: (element-type Gio.DBusProxy): the items or collections to lock
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
@@ -737,11 +737,11 @@ service_xlock_finish (SecretService *service,
  * The secret service may not be able to lock items individually, and may
  * lock an entire collection instead.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method returns immediately and completes asynchronously. The secret
- * service may prompt the user. secret_service_prompt() will be used to handle
+ * service may prompt the user. [method@Service.prompt] will be used to handle
  * any prompts that show up.
  */
 void
@@ -759,10 +759,10 @@ secret_service_lock (SecretService *service,
 
 /**
  * secret_service_lock_finish:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @result: asynchronous result passed to the callback
- * @locked: (out) (element-type Gio.DBusProxy) (transfer full) (allow-none):
- *          location to place list of items or collections that were locked
+ * @locked: (out) (element-type Gio.DBusProxy) (transfer full) (nullable) (optional):
+ *   location to place list of items or collections that were locked
  * @error: location to place an error on failure
  *
  * Complete asynchronous operation to lock items or collections in the secret
@@ -787,11 +787,11 @@ secret_service_lock_finish (SecretService *service,
 
 /**
  * secret_service_lock_sync:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @objects: (element-type Gio.DBusProxy): the items or collections to lock
- * @cancellable: optional cancellation object
- * @locked: (out) (element-type Gio.DBusProxy) (transfer full) (allow-none):
- *          location to place list of items or collections that were locked
+ * @cancellable: (nullable): optional cancellation object
+ * @locked: (out) (element-type Gio.DBusProxy) (transfer full) (nullable) (optional):
+ *   location to place list of items or collections that were locked
  * @error: location to place an error on failure
  *
  * Lock items or collections in the secret service.
@@ -799,12 +799,12 @@ secret_service_lock_finish (SecretService *service,
  * The secret service may not be able to lock items individually, and may
  * lock an entire collection instead.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block indefinitely and should not be used in user
  * interface threads. The secret service may prompt the user.
- * secret_service_prompt() will be used to handle any prompts that show up.
+ * [method@Service.prompt] will be used to handle any prompts that show up.
  *
  * Returns: the number of items or collections that were locked
  */
@@ -840,9 +840,9 @@ secret_service_lock_sync (SecretService *service,
 
 /**
  * secret_service_unlock:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @objects: (element-type Gio.DBusProxy): the items or collections to unlock
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
@@ -851,12 +851,12 @@ secret_service_lock_sync (SecretService *service,
  * The secret service may not be able to unlock items individually, and may
  * unlock an entire collection instead.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block indefinitely and should not be used in user
  * interface threads. The secret service may prompt the user.
- * secret_service_prompt() will be used to handle any prompts that show up.
+ * [method@Service.prompt] will be used to handle any prompts that show up.
  */
 void
 secret_service_unlock (SecretService *service,
@@ -873,10 +873,10 @@ secret_service_unlock (SecretService *service,
 
 /**
  * secret_service_unlock_finish:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @result: asynchronous result passed to the callback
- * @unlocked: (out) (element-type Gio.DBusProxy) (transfer full) (allow-none):
- *            location to place list of items or collections that were unlocked
+ * @unlocked: (out) (element-type Gio.DBusProxy) (transfer full) (nullable) (optional):
+ *   location to place list of items or collections that were unlocked
  * @error: location to place an error on failure
  *
  * Complete asynchronous operation to unlock items or collections in the secret
@@ -901,11 +901,11 @@ secret_service_unlock_finish (SecretService *service,
 
 /**
  * secret_service_unlock_sync:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @objects: (element-type Gio.DBusProxy): the items or collections to unlock
- * @cancellable: optional cancellation object
- * @unlocked: (out) (element-type Gio.DBusProxy) (transfer full) (allow-none):
- *            location to place list of items or collections that were unlocked
+ * @cancellable: (nullable): optional cancellation object
+ * @unlocked: (out) (element-type Gio.DBusProxy) (transfer full) (nullable) (optional):
+ *   location to place list of items or collections that were unlocked
  * @error: location to place an error on failure
  *
  * Unlock items or collections in the secret service.
@@ -913,12 +913,12 @@ secret_service_unlock_finish (SecretService *service,
  * The secret service may not be able to unlock items individually, and may
  * unlock an entire collection instead.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block indefinitely and should not be used in user
  * interface threads. The secret service may prompt the user.
- * secret_service_prompt() will be used to handle any prompts that show up.
+ * [method@Service.prompt] will be used to handle any prompts that show up.
  *
  * Returns: the number of items or collections that were unlocked
  */
@@ -953,7 +953,6 @@ secret_service_unlock_sync (SecretService *service,
 }
 
 typedef struct {
-	GCancellable *cancellable;
 	gchar *collection_path;
 	SecretValue *value;
 	GHashTable *properties;
@@ -965,12 +964,10 @@ static void
 store_closure_free (gpointer data)
 {
 	StoreClosure *store = data;
-	if (store->cancellable)
-		g_object_unref (store->cancellable);
 	g_free (store->collection_path);
 	secret_value_unref (store->value);
 	g_hash_table_unref (store->properties);
-	g_slice_free (StoreClosure, store);
+	g_free (store);
 }
 
 static void
@@ -983,9 +980,10 @@ on_store_keyring (GObject *source,
                   GAsyncResult *result,
                   gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	StoreClosure *store = g_simple_async_result_get_op_res_gpointer (async);
 	SecretService *service = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	StoreClosure *store = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	gchar *path;
 
@@ -994,15 +992,16 @@ on_store_keyring (GObject *source,
 		store->created_collection = TRUE;
 		secret_service_create_item_dbus_path (service, store->collection_path,
 		                                      store->properties, store->value,
-		                                      SECRET_ITEM_CREATE_REPLACE, store->cancellable,
-		                                      on_store_create, g_object_ref (async));
+		                                      SECRET_ITEM_CREATE_REPLACE,
+		                                      cancellable,
+		                                      on_store_create,
+		                                      g_steal_pointer (&task));
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
 	g_free (path);
+	g_clear_object (&task);
 }
 
 static void
@@ -1010,9 +1009,10 @@ on_store_unlock (GObject *source,
                  GAsyncResult *result,
                  gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	StoreClosure *store = g_simple_async_result_get_op_res_gpointer (async);
 	SecretService *service = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	StoreClosure *store = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 
 	secret_service_unlock_dbus_paths_finish (service, result, NULL, &error);
@@ -1020,14 +1020,15 @@ on_store_unlock (GObject *source,
 		store->unlocked_collection = TRUE;
 		secret_service_create_item_dbus_path (service, store->collection_path,
 		                                      store->properties, store->value,
-		                                      SECRET_ITEM_CREATE_REPLACE, store->cancellable,
-		                                      on_store_create, g_object_ref (async));
+		                                      SECRET_ITEM_CREATE_REPLACE,
+		                                      cancellable,
+		                                      on_store_create,
+		                                      g_steal_pointer (&task));
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -1035,9 +1036,10 @@ on_store_create (GObject *source,
                  GAsyncResult *result,
                  gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	StoreClosure *store = g_simple_async_result_get_op_res_gpointer (async);
 	SecretService *service = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	StoreClosure *store = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	GHashTable *properties;
 
@@ -1050,28 +1052,37 @@ on_store_create (GObject *source,
 
 	if (!store->created_collection &&
 	    (g_error_matches (error, SECRET_ERROR, SECRET_ERROR_NO_SUCH_OBJECT) ||
-	     g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD)) &&
+	     g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD) ||
+	     g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_OBJECT)) &&
 	    g_strcmp0 (store->collection_path, SECRET_ALIAS_PREFIX "default") == 0) {
 		properties = _secret_collection_properties_new (_("Default keyring"));
 		secret_service_create_collection_dbus_path (service, properties, "default",
-		                                            SECRET_COLLECTION_CREATE_NONE, store->cancellable,
-		                                            on_store_keyring, g_object_ref (async));
+		                                            SECRET_COLLECTION_CREATE_NONE,
+		                                            cancellable,
+		                                            on_store_keyring,
+		                                            g_steal_pointer (&task));
 		g_hash_table_unref (properties);
 		g_error_free (error);
-
-	} else if (!store->unlocked_collection &&
-	           g_error_matches (error, SECRET_ERROR, SECRET_ERROR_IS_LOCKED)) {
-		const gchar *paths[2] = { store->collection_path, NULL };
-		secret_service_unlock_dbus_paths (service, paths, store->cancellable,
-		                                  on_store_unlock, g_object_ref (async));
-		g_error_free (error);
-	} else {
-		if (error != NULL)
-			g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_clear_object (&task);
+		return;
 	}
 
-	g_object_unref (async);
+	if (!store->unlocked_collection &&
+	           g_error_matches (error, SECRET_ERROR, SECRET_ERROR_IS_LOCKED)) {
+		const gchar *paths[2] = { store->collection_path, NULL };
+		secret_service_unlock_dbus_paths (service, paths, cancellable,
+		                                  on_store_unlock, g_steal_pointer (&task));
+		g_error_free (error);
+		g_clear_object (&task);
+		return;
+	}
+
+	if (error != NULL)
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_boolean (task, TRUE);
+
+	g_clear_object (&task);
 }
 
 static void
@@ -1079,8 +1090,9 @@ on_store_service (GObject *source,
                   GAsyncResult *result,
                   gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	StoreClosure *store = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	StoreClosure *store = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretService *service;
 	GError *error = NULL;
 
@@ -1088,27 +1100,29 @@ on_store_service (GObject *source,
 	if (error == NULL) {
 		secret_service_create_item_dbus_path (service, store->collection_path,
 		                                      store->properties, store->value,
-		                                      SECRET_ITEM_CREATE_REPLACE, store->cancellable,
-		                                      on_store_create, g_object_ref (async));
+		                                      SECRET_ITEM_CREATE_REPLACE,
+		                                      cancellable,
+		                                      on_store_create,
+		                                      g_steal_pointer (&task));
 		g_object_unref (service);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_store:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema to use to check attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema to use to check attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
  * @value: the secret value
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -1119,11 +1133,11 @@ on_store_service (GObject *source,
  * If the attributes match a secret item already stored in the collection, then
  * the item will be updated with these new values.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * If @collection is not specified, then the default collection will be
- * used. Use #SECRET_COLLECTION_SESSION to store the password in the session
+ * used. Use [const@COLLECTION_SESSION] to store the password in the session
  * collection, which doesn't get stored across login sessions.
  *
  * This method will return immediately and complete asynchronously.
@@ -1139,7 +1153,7 @@ secret_service_store (SecretService *service,
                       GAsyncReadyCallback callback,
                       gpointer user_data)
 {
-	GSimpleAsyncResult *async;
+	GTask *task;
 	StoreClosure *store;
 	const gchar *schema_name;
 	GVariant *propval;
@@ -1154,11 +1168,10 @@ secret_service_store (SecretService *service,
 	if (schema != NULL && !_secret_attributes_validate (schema, attributes, G_STRFUNC, FALSE))
 		return;
 
-	async = g_simple_async_result_new  (G_OBJECT (service), callback, user_data,
-	                                    secret_service_store);
-	store = g_slice_new0 (StoreClosure);
+	task = g_task_new (service, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_service_store);
+	store = g_new0 (StoreClosure, 1);
 	store->collection_path = _secret_util_collection_to_path (collection);
-	store->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
 	store->value = secret_value_ref (value);
 	store->properties = g_hash_table_new_full (g_str_hash, g_str_equal, NULL,
 	                                           (GDestroyNotify)g_variant_unref);
@@ -1175,25 +1188,27 @@ secret_service_store (SecretService *service,
 	                     SECRET_ITEM_INTERFACE ".Attributes",
 	                     g_variant_ref_sink (propval));
 
-	g_simple_async_result_set_op_res_gpointer (async, store, store_closure_free);
+	g_task_set_task_data (task, store, store_closure_free);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_OPEN_SESSION, cancellable,
-		                    on_store_service, g_object_ref (async));
+		                    on_store_service, g_steal_pointer (&task));
 
 	} else {
 		secret_service_create_item_dbus_path (service, store->collection_path,
 		                                      store->properties, store->value,
-		                                      SECRET_ITEM_CREATE_REPLACE, store->cancellable,
-		                                      on_store_create, g_object_ref (async));
+		                                      SECRET_ITEM_CREATE_REPLACE,
+		                                      cancellable,
+		                                      on_store_create,
+		                                      g_steal_pointer (&task));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_store_finish:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @result: the asynchronous result passed to the callback
  * @error: location to place an error on failure
  *
@@ -1207,25 +1222,27 @@ secret_service_store_finish (SecretService *service,
                              GError **error)
 {
 	g_return_val_if_fail (service == NULL || SECRET_IS_SERVICE (service), FALSE);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (service),
-	                                                      secret_service_store), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, service), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-	if (_secret_util_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return FALSE;
+	}
 
 	return TRUE;
 }
 
 /**
  * secret_service_store_sync:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
  * @value: the secret value
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Store a secret value in the secret service.
@@ -1236,11 +1253,11 @@ secret_service_store_finish (SecretService *service,
  * the item will be updated with these new values.
  *
  * If @collection is %NULL, then the default collection will be
- * used. Use #SECRET_COLLECTION_SESSION to store the password in the session
+ * used. Use [const@COLLECTION_SESSION] to store the password in the session
  * collection, which doesn't get stored across login sessions.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
@@ -1287,39 +1304,23 @@ secret_service_store_sync (SecretService *service,
 	return ret;
 }
 
-typedef struct {
-	GVariant *attributes;
-	SecretValue *value;
-	GCancellable *cancellable;
-} LookupClosure;
-
-static void
-lookup_closure_free (gpointer data)
-{
-	LookupClosure *closure = data;
-	g_variant_unref (closure->attributes);
-	if (closure->value)
-		secret_value_unref (closure->value);
-	g_clear_object (&closure->cancellable);
-	g_slice_free (LookupClosure, closure);
-}
-
 static void
 on_lookup_get_secret (GObject *source,
                       GAsyncResult *result,
                       gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	LookupClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	GTask *task = G_TASK (user_data);
 	SecretService *self = SECRET_SERVICE (source);
+	SecretValue *value;
 	GError *error = NULL;
 
-	closure->value = secret_service_get_secret_for_dbus_path_finish (self, result, &error);
+	value = secret_service_get_secret_for_dbus_path_finish (self, result, &error);
 	if (error != NULL)
-		g_simple_async_result_take_error (res, error);
+		g_task_return_error (task, g_steal_pointer (&error));
+	else
+		g_task_return_pointer (task, value, secret_value_unref);
 
-	g_simple_async_result_complete (res);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -1327,30 +1328,28 @@ on_lookup_unlocked (GObject *source,
                     GAsyncResult *result,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	LookupClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
 	SecretService *self = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	gchar **unlocked = NULL;
 
-	secret_service_unlock_dbus_paths_finish (SECRET_SERVICE (source),
-	                                         result, &unlocked, &error);
+	secret_service_unlock_dbus_paths_finish (self, result, &unlocked, &error);
 	if (error != NULL) {
-		g_simple_async_result_take_error (res, error);
-		g_simple_async_result_complete (res);
+		g_task_return_error (task, g_steal_pointer (&error));
 
 	} else if (unlocked && unlocked[0]) {
 		secret_service_get_secret_for_dbus_path (self, unlocked[0],
-		                                         closure->cancellable,
+		                                         cancellable,
 		                                         on_lookup_get_secret,
-		                                         g_object_ref (res));
+		                                         g_steal_pointer (&task));
 
 	} else {
-		g_simple_async_result_complete (res);
+		g_task_return_pointer (task, NULL, NULL);
 	}
 
 	g_strfreev (unlocked);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -1358,38 +1357,37 @@ on_lookup_searched (GObject *source,
                     GAsyncResult *result,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	LookupClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
 	SecretService *self = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	gchar **unlocked = NULL;
 	gchar **locked = NULL;
 
 	secret_service_search_for_dbus_paths_finish (self, result, &unlocked, &locked, &error);
 	if (error != NULL) {
-		g_simple_async_result_take_error (res, error);
-		g_simple_async_result_complete (res);
+		g_task_return_error (task, g_steal_pointer (&error));
 
 	} else if (unlocked && unlocked[0]) {
 		secret_service_get_secret_for_dbus_path (self, unlocked[0],
-		                                         closure->cancellable,
+		                                         cancellable,
 		                                         on_lookup_get_secret,
-		                                         g_object_ref (res));
+		                                         g_steal_pointer (&task));
 
 	} else if (locked && locked[0]) {
 		const gchar *paths[] = { locked[0], NULL };
 		secret_service_unlock_dbus_paths (self, paths,
-		                                  closure->cancellable,
+		                                  cancellable,
 		                                  on_lookup_unlocked,
-		                                  g_object_ref (res));
+		                                  g_steal_pointer (&task));
 
 	} else {
-		g_simple_async_result_complete (res);
+		g_task_return_pointer (task, NULL, NULL);
 	}
 
 	g_strfreev (unlocked);
 	g_strfreev (locked);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -1397,32 +1395,33 @@ on_lookup_service (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	LookupClosure *lookup = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	GVariant *attributes = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretService *service;
 	GError *error = NULL;
 
 	service = secret_service_get_finish (result, &error);
 	if (error == NULL) {
-		_secret_service_search_for_paths_variant (service, lookup->attributes,
-		                                          lookup->cancellable,
-		                                          on_lookup_searched, g_object_ref (async));
+		_secret_service_search_for_paths_variant (service, attributes,
+		                                          cancellable,
+		                                          on_lookup_searched,
+		                                          g_steal_pointer (&task));
 		g_object_unref (service);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_lookup:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -1430,8 +1429,8 @@ on_lookup_service (GObject *source,
  *
  * The @attributes should be a set of key and value string pairs.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method will return immediately and complete asynchronously.
  */
@@ -1444,8 +1443,8 @@ secret_service_lookup (SecretService *service,
                        gpointer user_data)
 {
 	const gchar *schema_name = NULL;
-	GSimpleAsyncResult *res;
-	LookupClosure *closure;
+	GTask *task;
+	GVariant *attributes_v;
 
 	g_return_if_fail (service == NULL || SECRET_IS_SERVICE (service));
 	g_return_if_fail (attributes != NULL);
@@ -1458,29 +1457,29 @@ secret_service_lookup (SecretService *service,
 	if (schema != NULL && !(schema->flags & SECRET_SCHEMA_DONT_MATCH_NAME))
 		schema_name = schema->name;
 
-	res = g_simple_async_result_new (G_OBJECT (service), callback, user_data,
-	                                 secret_service_lookup);
-	closure = g_slice_new0 (LookupClosure);
-	closure->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
-	closure->attributes = _secret_attributes_to_variant (attributes, schema_name);
-	g_variant_ref_sink (closure->attributes);
-	g_simple_async_result_set_op_res_gpointer (res, closure, lookup_closure_free);
+	task = g_task_new (service, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_service_lookup);
+
+	attributes_v = _secret_attributes_to_variant (attributes, schema_name);
+	g_variant_ref_sink (attributes_v);
+	g_task_set_task_data (task, attributes_v, (GDestroyNotify) g_variant_unref);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_OPEN_SESSION, cancellable,
-		                    on_lookup_service, g_object_ref (res));
+		                    on_lookup_service, g_steal_pointer (&task));
 	} else {
-		_secret_service_search_for_paths_variant (service, closure->attributes,
-		                                          closure->cancellable,
-		                                          on_lookup_searched, g_object_ref (res));
+		_secret_service_search_for_paths_variant (service, attributes_v,
+		                                          cancellable,
+		                                          on_lookup_searched,
+		                                          g_steal_pointer (&task));
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_lookup_finish:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @result: the asynchronous result passed to the callback
  * @error: location to place an error on failure
  *
@@ -1488,53 +1487,49 @@ secret_service_lookup (SecretService *service,
  *
  * If no secret is found then %NULL is returned.
  *
- * Returns: (transfer full): a newly allocated #SecretValue, which should be
- *          released with secret_value_unref(), or %NULL if no secret found
+ * Returns: (transfer full): a newly allocated [struct@Value], which should be
+ *   released with [method@Value.unref], or %NULL if no secret found
  */
 SecretValue *
 secret_service_lookup_finish (SecretService *service,
                               GAsyncResult *result,
                               GError **error)
 {
-	GSimpleAsyncResult *res;
-	LookupClosure *closure;
 	SecretValue *value;
 
 	g_return_val_if_fail (service == NULL || SECRET_IS_SERVICE (service), NULL);
 	g_return_val_if_fail (error == NULL || *error == NULL, NULL);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (service),
-	                      secret_service_lookup), NULL);
+	g_return_val_if_fail (g_task_is_valid (result, service), NULL);
 
-	res = G_SIMPLE_ASYNC_RESULT (result);
-	if (_secret_util_propagate_error (res, error))
+	value = g_task_propagate_pointer (G_TASK (result), error);
+	if (!value) {
+		_secret_util_strip_remote_error (error);
 		return NULL;
+	}
 
-	closure = g_simple_async_result_get_op_res_gpointer (res);
-	value = closure->value;
-	closure->value = NULL;
 	return value;
 }
 
 /**
  * secret_service_lookup_sync:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Lookup a secret value in the secret service.
  *
  * The @attributes should be a set of key and value string pairs.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
  *
- * Returns: (transfer full): a newly allocated #SecretValue, which should be
- *          released with secret_value_unref(), or %NULL if no secret found
+ * Returns: (transfer full): a newly allocated [struct@Value], which should be
+ *   released with [method@Value.unref], or %NULL if no secret found
  */
 SecretValue *
 secret_service_lookup_sync (SecretService *service,
@@ -1571,7 +1566,6 @@ secret_service_lookup_sync (SecretService *service,
 }
 
 typedef struct {
-	GCancellable *cancellable;
 	SecretService *service;
 	GVariant *attributes;
 	gint deleted;
@@ -1585,8 +1579,7 @@ delete_closure_free (gpointer data)
 	if (closure->service)
 		g_object_unref (closure->service);
 	g_variant_unref (closure->attributes);
-	g_clear_object (&closure->cancellable);
-	g_slice_free (DeleteClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -1594,23 +1587,24 @@ on_delete_password_complete (GObject *source,
                              GAsyncResult *result,
                              gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	DeleteClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	SecretService *service = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	DeleteClosure *closure = g_task_get_task_data (task);
 	GError *error = NULL;
 	gboolean deleted;
 
 	closure->deleting--;
 
-	deleted = _secret_service_delete_path_finish (SECRET_SERVICE (source), result, &error);
+	deleted = _secret_service_delete_path_finish (service, result, &error);
 	if (error != NULL)
-		g_simple_async_result_take_error (res, error);
+		g_task_return_error (task, g_steal_pointer (&error));
 	if (deleted)
 		closure->deleted++;
 
 	if (closure->deleting <= 0)
-		g_simple_async_result_complete (res);
+		g_task_return_boolean (task, TRUE);
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -1618,31 +1612,32 @@ on_delete_searched (GObject *source,
                     GAsyncResult *result,
                     gpointer user_data)
 {
-	GSimpleAsyncResult *res = G_SIMPLE_ASYNC_RESULT (user_data);
-	DeleteClosure *closure = g_simple_async_result_get_op_res_gpointer (res);
+	SecretService *service = SECRET_SERVICE (source);
+	GTask *task = G_TASK (user_data);
+	DeleteClosure *closure = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 	gchar **unlocked = NULL;
 	gint i;
 
-	secret_service_search_for_dbus_paths_finish (SECRET_SERVICE (source), result, &unlocked, NULL, &error);
+	secret_service_search_for_dbus_paths_finish (service, result, &unlocked, NULL, &error);
 	if (error == NULL) {
 		for (i = 0; unlocked[i] != NULL; i++) {
 			_secret_service_delete_path (closure->service, unlocked[i], TRUE,
-			                             closure->cancellable,
+			                             cancellable,
 			                             on_delete_password_complete,
-			                             g_object_ref (res));
+			                             g_object_ref (task));
 			closure->deleting++;
 		}
 
 		if (closure->deleting == 0)
-			g_simple_async_result_complete (res);
+			g_task_return_boolean (task, FALSE);
 	} else {
-		g_simple_async_result_take_error (res, error);
-		g_simple_async_result_complete (res);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
 	g_strfreev (unlocked);
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 static void
@@ -1650,30 +1645,30 @@ on_delete_service (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	DeleteClosure *closure = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	DeleteClosure *closure = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	GError *error = NULL;
 
 	closure->service = secret_service_get_finish (result, &error);
 	if (error == NULL) {
 		_secret_service_search_for_paths_variant (closure->service, closure->attributes,
-		                                          closure->cancellable,
-		                                          on_delete_searched, g_object_ref (async));
+		                                          cancellable,
+		                                          on_delete_searched, g_steal_pointer (&task));
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_clear:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -1681,8 +1676,8 @@ on_delete_service (GObject *source,
  *
  * The @attributes should be a set of key and value string pairs.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method will return immediately and complete asynchronously.
  */
@@ -1695,7 +1690,7 @@ secret_service_clear (SecretService *service,
                       gpointer user_data)
 {
 	const gchar *schema_name = NULL;
-	GSimpleAsyncResult *res;
+	GTask *task;
 	DeleteClosure *closure;
 
 	g_return_if_fail (service == NULL || SECRET_SERVICE (service));
@@ -1709,33 +1704,32 @@ secret_service_clear (SecretService *service,
 	if (schema != NULL && !(schema->flags & SECRET_SCHEMA_DONT_MATCH_NAME))
 		schema_name = schema->name;
 
-	res = g_simple_async_result_new (G_OBJECT (service), callback, user_data,
-	                                 secret_service_clear);
-	closure = g_slice_new0 (DeleteClosure);
-	closure->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	task = g_task_new (service, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_service_clear);
+	closure = g_new0 (DeleteClosure, 1);
 	closure->attributes = _secret_attributes_to_variant (attributes, schema_name);
 	g_variant_ref_sink (closure->attributes);
-	g_simple_async_result_set_op_res_gpointer (res, closure, delete_closure_free);
+	g_task_set_task_data (task, closure, delete_closure_free);
 
 	/* A double check to make sure we don't delete everything, should have been checked earlier */
 	g_assert (g_variant_n_children (closure->attributes) > 0);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_NONE, cancellable,
-		                    on_delete_service, g_object_ref (res));
+		                    on_delete_service, g_steal_pointer (&task));
 	} else {
 		closure->service = g_object_ref (service);
 		_secret_service_search_for_paths_variant (closure->service, closure->attributes,
-		                                          closure->cancellable,
-		                                          on_delete_searched, g_object_ref (res));
+		                                          cancellable,
+		                                          on_delete_searched, g_steal_pointer (&task));
 	}
 
-	g_object_unref (res);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_clear_finish:
- * @service: (allow-none): the secret service
+ * @service: (nullable): the secret service
  * @result: the asynchronous result passed to the callback
  * @error: location to place an error on failure
  *
@@ -1749,36 +1743,32 @@ secret_service_clear_finish (SecretService *service,
                              GAsyncResult *result,
                              GError **error)
 {
-	GSimpleAsyncResult *res;
-	DeleteClosure *closure;
-
 	g_return_val_if_fail (service == NULL || SECRET_IS_SERVICE (service), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (service),
-	                      secret_service_clear), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, service), FALSE);
 
-	res = G_SIMPLE_ASYNC_RESULT (result);
-	if (_secret_util_propagate_error (res, error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return FALSE;
+	}
 
-	closure = g_simple_async_result_get_op_res_gpointer (res);
-	return closure->deleted > 0;
+	return TRUE;
 }
 
 /**
  * secret_service_clear_sync:
- * @service: (allow-none): the secret service
- * @schema: (allow-none): the schema for the attributes
+ * @service: (nullable): the secret service
+ * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Remove unlocked items which match the attributes from the secret service.
  *
  * The @attributes should be a set of key and value string pairs.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
@@ -1820,7 +1810,6 @@ secret_service_clear_sync (SecretService *service,
 }
 
 typedef struct {
-	GCancellable *cancellable;
 	gchar *alias;
 	gchar *collection_path;
 } SetClosure;
@@ -1829,11 +1818,9 @@ static void
 set_closure_free (gpointer data)
 {
 	SetClosure *set = data;
-	if (set->cancellable)
-		g_object_unref (set->cancellable);
 	g_free (set->alias);
 	g_free (set->collection_path);
-	g_slice_free (SetClosure, set);
+	g_free (set);
 }
 
 static void
@@ -1841,15 +1828,17 @@ on_set_alias_done (GObject *source,
                    GAsyncResult *result,
                    gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
+	GTask *task = G_TASK (user_data);
+	SecretService *service = SECRET_SERVICE (source);
 	GError *error = NULL;
 
-	secret_service_set_alias_to_dbus_path_finish (SECRET_SERVICE (source), result, &error);
-	if (error != NULL)
-		g_simple_async_result_take_error (async, error);
+	if (secret_service_set_alias_to_dbus_path_finish (service, result, &error)) {
+		g_task_return_boolean (task, TRUE);
+	} else {
+		g_task_return_error (task, g_steal_pointer (&error));
+	}
 
-	g_simple_async_result_complete (async);
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 static void
@@ -1857,8 +1846,9 @@ on_set_alias_service (GObject *source,
                       GAsyncResult *result,
                       gpointer user_data)
 {
-	GSimpleAsyncResult *async = G_SIMPLE_ASYNC_RESULT (user_data);
-	SetClosure *set = g_simple_async_result_get_op_res_gpointer (async);
+	GTask *task = G_TASK (user_data);
+	SetClosure *set = g_task_get_task_data (task);
+	GCancellable *cancellable = g_task_get_cancellable (task);
 	SecretService *service;
 	GError *error = NULL;
 
@@ -1866,33 +1856,33 @@ on_set_alias_service (GObject *source,
 	if (error == NULL) {
 		secret_service_set_alias_to_dbus_path (service, set->alias,
 		                                       set->collection_path,
-		                                       set->cancellable,
+		                                       cancellable,
 		                                       on_set_alias_done,
-		                                       g_object_ref (async));
+		                                       g_steal_pointer (&task));
 		g_object_unref (service);
 
 	} else {
-		g_simple_async_result_take_error (async, error);
-		g_simple_async_result_complete (async);
+		g_task_return_error (task, g_steal_pointer (&error));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_set_alias:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @alias: the alias to assign the collection to
- * @collection: (allow-none): the collection to assign to the alias
- * @cancellable: (allow-none): optional cancellation object
+ * @collection: (nullable): the collection to assign to the alias
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to pass to the callback
  *
- * Assign a collection to this alias. Aliases help determine
- * well known collections, such as 'default'.
+ * Assign a collection to this alias.
  *
- * If @service is NULL, then secret_service_get() will be called to get
- * the default #SecretService proxy.
+ * Aliases help determine well known collections, such as 'default'.
+ *
+ * If @service is %NULL, then [func@Service.get] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method will return immediately and complete asynchronously.
  */
@@ -1904,7 +1894,7 @@ secret_service_set_alias (SecretService *service,
                           GAsyncReadyCallback callback,
                           gpointer user_data)
 {
-	GSimpleAsyncResult *async;
+	GTask *task;
 	SetClosure *set;
 	const gchar *path;
 
@@ -1913,10 +1903,9 @@ secret_service_set_alias (SecretService *service,
 	g_return_if_fail (collection == NULL || SECRET_IS_COLLECTION (collection));
 	g_return_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable));
 
-	async = g_simple_async_result_new (G_OBJECT (service), callback, user_data,
-	                                   secret_service_set_alias);
-	set = g_slice_new0 (SetClosure);
-	set->cancellable = cancellable ? g_object_ref (cancellable) : NULL;
+	task = g_task_new (service, cancellable, callback, user_data);
+	g_task_set_source_tag (task, secret_service_set_alias);
+	set = g_new0 (SetClosure, 1);
 	set->alias = g_strdup (alias);
 
 	if (collection) {
@@ -1927,25 +1916,25 @@ secret_service_set_alias (SecretService *service,
 	}
 
 	set->collection_path = g_strdup (path);
-	g_simple_async_result_set_op_res_gpointer (async, set, set_closure_free);
+	g_task_set_task_data (task, set, set_closure_free);
 
 	if (service == NULL) {
 		secret_service_get (SECRET_SERVICE_NONE, cancellable,
-		                    on_set_alias_service, g_object_ref (async));
+		                    on_set_alias_service, g_steal_pointer (&task));
 	} else {
 		secret_service_set_alias_to_dbus_path (service, set->alias,
 		                                       set->collection_path,
-		                                       set->cancellable,
+		                                       cancellable,
 		                                       on_set_alias_done,
-		                                       g_object_ref (async));
+		                                       g_steal_pointer (&task));
 	}
 
-	g_object_unref (async);
+	g_clear_object (&task);
 }
 
 /**
  * secret_service_set_alias_finish:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @result: asynchronous result passed to callback
  * @error: location to place error on failure
  *
@@ -1959,29 +1948,30 @@ secret_service_set_alias_finish (SecretService *service,
                                  GError **error)
 {
 	g_return_val_if_fail (service == NULL || SECRET_IS_SERVICE (service), FALSE);
-	g_return_val_if_fail (g_simple_async_result_is_valid (result, G_OBJECT (service),
-	                                                      secret_service_set_alias), FALSE);
+	g_return_val_if_fail (g_task_is_valid (result, service), FALSE);
 	g_return_val_if_fail (error == NULL || *error == NULL, FALSE);
 
-	if (_secret_util_propagate_error (G_SIMPLE_ASYNC_RESULT (result), error))
+	if (!g_task_propagate_boolean (G_TASK (result), error)) {
+		_secret_util_strip_remote_error (error);
 		return FALSE;
+	}
 
 	return TRUE;
 }
 
 /**
  * secret_service_set_alias_sync:
- * @service: (allow-none): a secret service object
+ * @service: (nullable): a secret service object
  * @alias: the alias to assign the collection to
- * @collection: (allow-none): the collection to assign to the alias
- * @cancellable: (allow-none): optional cancellation object
+ * @collection: (nullable): the collection to assign to the alias
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place error on failure
  *
  * Assign a collection to this alias. Aliases help determine
  * well known collections, such as 'default'.
  *
- * If @service is NULL, then secret_service_get_sync() will be called to get
- * the default #SecretService proxy.
+ * If @service is %NULL, then [func@Service.get_sync] will be called to get
+ * the default [class@Service] proxy.
  *
  * This method may block and should not be used in user interface threads.
  *

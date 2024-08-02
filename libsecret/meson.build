@@ -36,7 +36,7 @@ libsecret_headers = [
   'secret-value.h',
 ]
 
-if get_option('gcrypt')
+if with_crypto
   libsecret_sources += [
     'secret-file-backend.c',
     'secret-file-collection.c',
@@ -76,8 +76,8 @@ libsecret_dependencies = [
   glib_deps,
 ]
 
-if get_option('gcrypt')
-  libsecret_dependencies += gcrypt_dep
+if with_crypto
+  libsecret_dependencies += crypto_deps
 endif
 
 libsecret_cflags = [
@@ -132,6 +132,7 @@ if get_option('introspection')
     'secret-types.h',
     'secret-value.c',
     'secret-value.h',
+    'secret-util.c',
   ]
   libsecret_gir_sources += version_h
   libsecret_gir_sources += _enums_generated
@@ -230,7 +231,7 @@ test_names = [
   'test-collection',
 ]
 
-if get_option('gcrypt')
+if with_crypto
   test_names += [
     'test-file-collection',
   ]
@@ -303,19 +304,29 @@ if get_option('introspection')
   endif
 
   # Vala tests
-  if get_option('vapi')
+  # FIXME: Don't add Vala tests when generating a coverage build, as this
+  # will fail due to https://github.com/mesonbuild/meson/issues/7426
+  if get_option('vapi') and not get_option('b_coverage')
     # FIXME: the "native" kwarg should be added once we can require meson ≥0.54
     add_languages('vala')
     valac = meson.get_compiler('vala')
 
-    valatest_names = [
-      'test-vala-lang',
-      'test-vala-unstable',
+    valatests = [
+      {
+        'name': 'test-vala-lang',
+        'cflags': [],
+      },
+      {
+        'name': 'test-vala-unstable',
+        'cflags': [ '-DSECRET_WITH_UNSTABLE' ],
+      },
     ]
 
-    foreach _valatest : valatest_names
-      test_bin = executable(_valatest,
-        '@0@.vala'.format(_valatest),
+    foreach _valatest: valatests
+      name = _valatest['name']
+      extra_cflags = _valatest['cflags']
+
+      test_bin = executable(name, '@0@.vala'.format(name),
         dependencies: [
           glib_deps,
           valac.find_library('glib-2.0'),
@@ -325,11 +336,10 @@ if get_option('introspection')
         ],
         link_with: mock_service_lib,
         include_directories: config_h_dir,
-        c_args: test_cflags,
+        c_args: test_cflags + extra_cflags,
       )
 
-      test(_valatest, test_bin,
-        suite: 'vala',
+      test(name, test_bin, suite: 'vala',
       )
     endforeach
   endif

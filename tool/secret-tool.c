@@ -18,6 +18,8 @@
 #include "libsecret/secret-password.h"
 #include "libsecret/secret-retrievable.h"
 #include "libsecret/secret-value.h"
+#include "libsecret/secret-service.h"
+#include "libsecret/secret-paths.h"
 
 #include <glib/gi18n.h>
 
@@ -28,6 +30,7 @@
 #include <string.h>
 
 #define SECRET_ALIAS_PREFIX "/org/freedesktop/secrets/aliases/"
+#define SECRET_COLLECTION_PREFIX "/org/freedesktop/secrets/collection/"
 
 static gchar **attribute_args = NULL;
 static gchar *store_label = NULL;
@@ -58,6 +61,13 @@ static const GOptionEntry CLEAR_OPTIONS[] = {
 	{ NULL }
 };
 
+/* secret-tool lock collections="xxxx" */
+static const GOptionEntry COLLECTION_OPTIONS[] = {
+	{ "collection", 'c', 0, G_OPTION_ARG_STRING, &store_collection,
+	  N_("collection in which to lock"), NULL },
+	{ NULL }
+};
+
 typedef int       (* SecretToolAction)          (int argc, char *argv[]);
 
 static void       usage                         (void) G_GNUC_NORETURN;
@@ -69,6 +79,7 @@ usage (void)
 	g_printerr ("       secret-tool lookup attribute value ...\n");
 	g_printerr ("       secret-tool clear attribute value ...\n");
 	g_printerr ("       secret-tool search [--all] [--unlock] attribute value ...\n");
+	g_printerr ("       secret-tool lock --collection='collection'\n");
 	exit (2);
 }
 
@@ -142,7 +153,10 @@ secret_tool_action_clear (int argc,
 	g_hash_table_unref (attributes);
 
 	if (!ret) {
-		g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+		if (error != NULL) {
+			g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+			g_error_free (error);
+		}
 		return 1;
 	}
 
@@ -215,6 +229,7 @@ secret_tool_action_lookup (int argc,
 
 	if (error != NULL) {
 		g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+		g_error_free (error);
 		return 1;
 	}
 
@@ -257,9 +272,13 @@ read_password_stdin (void)
 		}
 	}
 
-	/* TODO: Verify that the password really is utf-8 text. */
-	return secret_value_new_full (password, length, "text/plain",
+	if (g_utf8_validate (password, -1, NULL)) {
+		return secret_value_new_full (password, length, "text/plain",
 	                              (GDestroyNotify)secret_password_free);
+	} else {
+		g_printerr ("%s: password not valid UTF-8\n", g_get_prgname ());
+		exit (1);
+	}
 }
 
 static SecretValue *
@@ -380,7 +399,7 @@ on_retrieve_secret (GObject *source_object,
 		part = strrchr (path, '/');
 		if (part == NULL)
 			part = path;
-		g_print ("[%s]\n", path);
+		g_print ("[%s]\n", part);
 	} else {
 		g_print ("[no path]\n");
 	}
@@ -482,10 +501,76 @@ secret_tool_action_search (int argc,
 
 	if (error != NULL) {
 		g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+		g_error_free (error);
 		return 1;
 	}
 
 	return 0;
+}
+
+static int
+secret_tool_action_lock (int argc,
+                         char *argv[])
+{
+	int ret = 0;
+	SecretService *service = NULL;
+	GError *error = NULL;
+	GOptionContext *context = NULL;
+	GList *locked = NULL;
+	GList *collections = NULL;
+	SecretCollection *collection = NULL;
+
+	service = secret_service_get_sync (SECRET_SERVICE_LOAD_COLLECTIONS, NULL, &error);
+	if (error != NULL) {
+		g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+		ret = 1;
+		goto out;
+	}
+
+	context = g_option_context_new ("collections");
+	g_option_context_add_main_entries (context, COLLECTION_OPTIONS, GETTEXT_PACKAGE);
+	g_option_context_parse (context, &argc, &argv, &error);
+
+	if (store_collection != NULL) {
+		char *collection_path = NULL;
+
+		collection_path = g_strconcat (SECRET_COLLECTION_PREFIX, store_collection, NULL);
+		collection = secret_collection_new_for_dbus_path_sync (service, collection_path, SECRET_COLLECTION_NONE, NULL, &error);
+		g_free (store_collection);
+		g_free (collection_path);
+
+		if (error != NULL) {
+			g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+			ret = 1;
+			goto out;
+		}
+
+		if (secret_collection_get_locked (collection) || collection == NULL) {
+			ret = 1;
+			goto out;
+		}
+
+		collections = g_list_append (collections,
+		                             g_steal_pointer (&collection));
+	} else {
+		collections = secret_service_get_collections (service);
+	}
+
+	secret_service_lock_sync (NULL, collections, 0, &locked, &error);
+	if (error != NULL) {
+		g_printerr ("%s: %s\n", g_get_prgname (), error->message);
+		ret = 1;
+		goto out;
+	}
+
+out:
+	g_clear_object (&collection);
+	g_clear_list (&collections, g_object_unref);
+	g_clear_list (&locked, g_object_unref);
+	g_clear_pointer (&context, g_option_context_free);
+	g_clear_error (&error);
+	g_clear_object (&service);
+	return ret;
 }
 
 int
@@ -513,6 +598,8 @@ main (int argc,
 		action = secret_tool_action_clear;
 	} else if (g_str_equal (argv[1], "search")) {
 		action = secret_tool_action_search;
+	} else if (g_str_equal (argv[1], "lock")) {
+		action = secret_tool_action_lock;
 	} else {
 		usage ();
 	}
