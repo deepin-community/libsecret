@@ -10,9 +10,17 @@ secret_tool = executable('secret-tool',
   install: true,
 )
 
-if get_option('gcrypt') and host_machine.system() != 'windows'
+if with_crypto and host_machine.system() != 'windows'
   test('test-secret-tool.sh',
     find_program('test-secret-tool.sh'),
+    env: test_env,
+    suite: 'secret-tool',
+  )
+endif
+
+if get_option('tpm2')
+  test('test-secret-tool-tpm2.sh',
+    find_program('test-secret-tool-tpm2.sh'),
     env: test_env,
     suite: 'secret-tool',
   )

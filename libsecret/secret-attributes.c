@@ -19,19 +19,6 @@
 
 #include <string.h>
 
-/**
- * SECTION:secret-attributes
- * @title: Secret Attributes
- * @short_description: secret attributes
- *
- * Each item has a set of attributes, which are used to locate the item later.
- * These are not stored or transferred in a secure manner. Each attribute has
- * a string name and a string value. These attributes are represented by a
- * #GHashTable with string keys and values.
- *
- * Use secret_attributes_build() to simply build up a set of attributes.
- */
-
 GVariant *
 _secret_attributes_to_variant (GHashTable *attributes,
                                const gchar *schema_name)
@@ -84,10 +71,10 @@ _secret_attributes_for_variant (GVariant *variant)
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * Returns: (transfer full) (element-type utf8 utf8): a new table of
- *          attributes, to be released with g_hash_table_unref()
+ *   attributes, to be released with [func@GLib.HashTable.unref]
  */
 GHashTable *
 secret_attributes_build (const SecretSchema *schema,
@@ -113,10 +100,10 @@ secret_attributes_build (const SecretSchema *schema,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * Returns: (transfer full) (element-type utf8 utf8): a new table of
- *          attributes, to be released with g_hash_table_unref()
+ *   attributes, to be released with [func@GLib.HashTable.unref]
  */
 GHashTable *
 secret_attributes_buildv (const SecretSchema *schema,
@@ -192,11 +179,23 @@ secret_attributes_buildv (const SecretSchema *schema,
 	return attributes;
 }
 
+/**
+ * secret_attributes_validate:
+ * @schema: the schema for the attributes
+ * @attributes: the attributes to be validated
+ * @error: place to report errors encountered
+ *
+ * Check if attributes are valid according to the provided schema.
+ *
+ * Verifies schema name if available, attribute names and parsing
+ * of attribute values.
+ *
+ * Returns: whether or not the given attributes table is valid
+ */
 gboolean
-_secret_attributes_validate (const SecretSchema *schema,
-                             GHashTable *attributes,
-                             const char *pretty_function,
-                             gboolean matching)
+secret_attributes_validate (const SecretSchema *schema,
+                            GHashTable *attributes,
+			    GError **error)
 {
 	const SecretSchemaAttribute *attribute;
 	GHashTableIter iter;
@@ -217,8 +216,10 @@ _secret_attributes_validate (const SecretSchema *schema,
 		   name. */
 		if (g_str_equal (key, "xdg:schema")) {
 			if (!g_str_equal (value, schema->name)) {
-				g_critical ("%s: xdg:schema value %s differs from schema %s:",
-					    pretty_function, value, schema->name);
+				g_set_error_literal (error,
+						     SECRET_ERROR,
+						     SECRET_ERROR_MISMATCHED_SCHEMA,
+						     "Schema attribute doesn't match schema name");
 				return FALSE;
 			}
 			continue;
@@ -240,16 +241,22 @@ _secret_attributes_validate (const SecretSchema *schema,
 		}
 
 		if (attribute == NULL) {
-			g_critical ("%s: invalid %s attribute for %s schema",
-			            pretty_function, key, schema->name);
+			g_set_error (error,
+				     SECRET_ERROR,
+				     SECRET_ERROR_NO_MATCHING_ATTRIBUTE,
+				     "Schema does not contain any attributes matching %s",
+				     key);
 			return FALSE;
 		}
 
 		switch (attribute->type) {
 		case SECRET_SCHEMA_ATTRIBUTE_BOOLEAN:
 			if (!g_str_equal (value, "true") && !g_str_equal (value, "false")) {
-				g_critical ("%s: invalid %s boolean value for %s schema: %s",
-				            pretty_function, key, schema->name, value);
+				g_set_error (error,
+					     SECRET_ERROR,
+					     SECRET_ERROR_WRONG_TYPE,
+					     "Attribute %s could not be parsed into a boolean",
+					     key);
 				return FALSE;
 			}
 			break;
@@ -257,34 +264,69 @@ _secret_attributes_validate (const SecretSchema *schema,
 			end = NULL;
 			g_ascii_strtoll (value, &end, 10);
 			if (!end || end[0] != '\0') {
-				g_warning ("%s: invalid %s integer value for %s schema: %s",
-				           pretty_function, key, schema->name, value);
+				g_set_error (error,
+					     SECRET_ERROR,
+					     SECRET_ERROR_WRONG_TYPE,
+					     "Attribute %s could not be parsed into an integer",
+					     key);
 				return FALSE;
 			}
 			break;
 		case SECRET_SCHEMA_ATTRIBUTE_STRING:
 			if (!g_utf8_validate (value, -1, NULL)) {
-				g_warning ("%s: invalid %s string value for %s schema: %s",
-				           pretty_function, key, schema->name, value);
+				g_set_error (error,
+					     SECRET_ERROR,
+					     SECRET_ERROR_WRONG_TYPE,
+					     "Attribute %s could not be parsed into a string",
+					     key);
 				return FALSE;
 			}
 			break;
 		default:
-			g_warning ("%s: invalid %s value type in %s schema",
-			           pretty_function, key, schema->name);
+			g_set_error (error,
+				     SECRET_ERROR,
+				     SECRET_ERROR_WRONG_TYPE,
+				     "%s: Invalid attribute type",
+				     key);
 			return FALSE;
 		}
 	}
 
 	/* Nothing to match on, resulting search would match everything :S */
-	if (matching && !any && schema->flags & SECRET_SCHEMA_DONT_MATCH_NAME) {
-		g_warning ("%s: must specify at least one attribute to match",
-		           pretty_function);
+	if (!any && schema->flags & SECRET_SCHEMA_DONT_MATCH_NAME) {
+		g_set_error_literal (error,
+				     SECRET_ERROR,
+				     SECRET_ERROR_EMPTY_TABLE,
+				     "Must have at least one attribute to check");
 		return FALSE;
 	}
 
 	return TRUE;
 }
+
+// Private function to be used internally
+gboolean
+_secret_attributes_validate (const SecretSchema *schema,
+                             GHashTable *attributes,
+                             const char *pretty_function,
+                             gboolean matching)
+{
+	GError *error = NULL;
+
+	if (!secret_attributes_validate (schema, attributes, &error)) {
+		// if matching is false, an empty table is fine
+		if ((!matching) && (error->code == SECRET_ERROR_EMPTY_TABLE)) {
+			g_error_free (error);
+			return TRUE;
+		}
+		
+		g_warning ("%s: error validating schema: %s", pretty_function, error->message);
+		g_error_free (error);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 
 GHashTable *
 _secret_attributes_copy (GHashTable *attributes)

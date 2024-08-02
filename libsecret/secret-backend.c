@@ -16,7 +16,7 @@
 
 #include "secret-backend.h"
 
-#ifdef WITH_GCRYPT
+#ifdef WITH_CRYPTO
 #include "secret-file-backend.h"
 #endif
 
@@ -25,20 +25,12 @@
 #include "libsecret/secret-enum-types.h"
 
 /**
- * SECTION:secret-backend
- * @title: SecretBackend
- * @short_description: A backend implementation of password storage
+ * SecretBackend:
  *
  * #SecretBackend represents a backend implementation of password
  * storage.
  *
  * Stability: Stable
- */
-
-/**
- * SecretBackend:
- *
- * An object representing a backend implementation of password storage.
  *
  * Since: 0.19.0
  */
@@ -48,14 +40,14 @@
  * @parent_iface: the parent interface
  * @ensure_for_flags: implementation of reinitialization step in constructor, optional
  * @ensure_for_flags_finish: implementation of reinitialization step in constructor, optional
- * @store: implementation of secret_password_store(), required
- * @store_finish: implementation of secret_password_store_finish(), required
- * @lookup: implementation of secret_password_lookup(), required
- * @lookup_finish: implementation of secret_password_lookup_finish(), required
- * @clear: implementation of secret_password_clear(), required
- * @clear_finish: implementation of secret_password_clear_finish(), required
- * @search: implementation of secret_password_search(), required
- * @search_finish: implementation of secret_password_search_finish(), required
+ * @store: implementation of [func@password_store], required
+ * @store_finish: implementation of [func@password_store_finish], required
+ * @lookup: implementation of [func@password_lookup], required
+ * @lookup_finish: implementation of [func@password_lookup_finish], required
+ * @clear: implementation of [func@password_clear], required
+ * @clear_finish: implementation of [func@password_clear_finish], required
+ * @search: implementation of [func@password_search], required
+ * @search_finish: implementation of [func@password_search_finish], required
  *
  * The interface for #SecretBackend.
  *
@@ -66,13 +58,19 @@
  * SecretBackendFlags:
  * @SECRET_BACKEND_NONE: no flags for initializing the #SecretBackend
  * @SECRET_BACKEND_OPEN_SESSION: establish a session for transfer of secrets
- *                               while initializing the #SecretBackend
+ *   while initializing the #SecretBackend
  * @SECRET_BACKEND_LOAD_COLLECTIONS: load collections while initializing the
- *                                   #SecretBackend
+ *   #SecretBackend
  *
  * Flags which determine which parts of the #SecretBackend are initialized.
  *
  * Since: 0.19.0
+ */
+
+/**
+ * SECRET_BACKEND_EXTENSION_POINT_NAME:
+ *
+ * Extension point for the secret backend.
  */
 
 G_DEFINE_INTERFACE_WITH_CODE (SecretBackend, secret_backend, G_TYPE_OBJECT,
@@ -150,12 +148,12 @@ backend_get_impl_type (void)
 	GIOExtensionPoint *ep;
 
 	g_type_ensure (secret_service_get_type ());
-#ifdef WITH_GCRYPT
+#ifdef WITH_CRYPTO
 	g_type_ensure (secret_file_backend_get_type ());
 #endif
 
-#ifdef WITH_GCRYPT
-	if (g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS) &&
+#ifdef WITH_CRYPTO
+	if ((g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS) || g_getenv ("SNAP_NAME") != NULL) &&
 	    _secret_file_backend_check_portal_version ())
 		extension_name = "file";
 	else
@@ -204,12 +202,13 @@ on_ensure_for_flags (GObject *source_object,
 /**
  * secret_backend_get:
  * @flags: flags for which service functionality to ensure is initialized
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
- * Get a #SecretBackend instance. If such a backend already exists,
- * then the same backend is returned.
+ * Get a #SecretBackend instance.
+ *
+ * If such a backend already exists, then the same backend is returned.
  *
  * If @flags contains any flags of which parts of the secret backend to
  * ensure are initialized, then those will be initialized before completing.
@@ -264,7 +263,7 @@ secret_backend_get (SecretBackendFlags flags,
  * Complete an asynchronous operation to get a #SecretBackend.
  *
  * Returns: (transfer full): a new reference to a #SecretBackend proxy, which
- *          should be released with g_object_unref().
+ *   should be released with [method@GObject.Object.unref].
  *
  * Since: 0.19.0
  */

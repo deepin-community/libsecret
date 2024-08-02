@@ -30,67 +30,62 @@
 #include "egg/egg-secure-memory.h"
 
 /**
- * SECTION:secret-service
- * @title: SecretService
- * @short_description: the Secret Service
+ * SecretService:
+ *
+ * A proxy object representing the Secret Service.
  *
  * A #SecretService object represents the Secret Service implementation which
  * runs as a D-Bus service.
  *
  * Normally a single #SecretService object can be shared between multiple
- * callers. The secret_service_get() method is used to access this #SecretService
+ * callers. The [func@Service.get] method is used to access this #SecretService
  * object. If a new independent #SecretService object is required, use
- * secret_service_open().
+ * [func@Service.open].
  *
  * In order to securely transfer secrets to the Sercret Service, a session
  * is established. This session can be established while initializing a
  * #SecretService object by passing the %SECRET_SERVICE_OPEN_SESSION flag
- * to the secret_service_get() or secret_service_open() functions. In order to
+ * to the [func@Service.get] or [func@Service.open] functions. In order to
  * establish a session on an already existing #SecretService, use the
- * secret_service_ensure_session() function.
+ * [method@Service.ensure_session] function.
  *
- * To search for items, use the secret_service_search() method.
+ * To search for items, use the [method@Service.search] method.
  *
  * Multiple collections can exist in the Secret Service, each of which contains
- * secret items. In order to instantiate #SecretCollection objects which
+ * secret items. In order to instantiate [class@Collection] objects which
  * represent those collections while initializing a #SecretService then pass
- * the %SECRET_SERVICE_LOAD_COLLECTIONS flag to the secret_service_get() or
- * secret_service_open() functions. In order to establish a session on an already
- * existing #SecretService, use the secret_service_load_collections() function.
- * To access the list of collections use secret_service_get_collections().
+ * the %SECRET_SERVICE_LOAD_COLLECTIONS flag to the [func@Service.get] or
+ * [func@Service.open] functions. In order to establish a session on an already
+ * existing #SecretService, use the [method@Service.load_collections] function.
+ * To access the list of collections use [method@Service.get_collections].
  *
  * Certain actions on the Secret Service require user prompting to complete,
  * such as creating a collection, or unlocking a collection. When such a prompt
- * is necessary, then a #SecretPrompt object is created by this library, and
- * passed to the secret_service_prompt() method. In this way it is handled
+ * is necessary, then a [class@Prompt] object is created by this library, and
+ * passed to the [method@Service.prompt] method. In this way it is handled
  * automatically.
  *
- * In order to customize prompt handling, override the <literal>prompt_async</literal>
- * and <literal>prompt_finish</literal> virtual methods of the #SecretService class.
+ * In order to customize prompt handling, override the
+ * [vfunc@Service.prompt_async] and [vfunc@Service.prompt_finish] virtual
+ * methods of the #SecretService class.
  *
  * Stability: Stable
  */
 
 /**
- * SecretService:
- *
- * A proxy object representing the Secret Service.
- */
-
-/**
  * SecretServiceClass:
  * @parent_class: the parent class
- * @collection_gtype: the #GType of the #SecretCollection objects instantiated
- *                    by the #SecretService proxy
- * @item_gtype: the #GType of the #SecretItem objects instantiated by the
- *              #SecretService proxy
+ * @collection_gtype: the [alias@GLib.Type] of the [class@Collection] objects instantiated
+ *   by the #SecretService proxy
+ * @item_gtype: the [alias@GLib.Type] of the [class@Item] objects instantiated by the
+ *   #SecretService proxy
  * @prompt_async: called to perform asynchronous prompting when necessary
  * @prompt_finish: called to complete an asynchronous prompt operation
  * @prompt_sync: called to perform synchronous prompting when necessary
  * @get_collection_gtype: called to get the GObject type for collections
- *                        instantiated by the #SecretService proxy
+ *   instantiated by the #SecretService proxy
  * @get_item_gtype: called to get the GObject type for collections
- *                  instantiated by the #SecretService proxy
+ *   instantiated by the #SecretService proxy
  *
  * The class for #SecretService.
  */
@@ -99,12 +94,12 @@
  * SecretServiceFlags:
  * @SECRET_SERVICE_NONE: no flags for initializing the #SecretService
  * @SECRET_SERVICE_OPEN_SESSION: establish a session for transfer of secrets
- *                               while initializing the #SecretService
+ *   while initializing the #SecretService
  * @SECRET_SERVICE_LOAD_COLLECTIONS: load collections while initializing the
- *                                   #SecretService
+ *   #SecretService
  *
  * Flags which determine which parts of the #SecretService proxy are initialized
- * during a secret_service_get() or secret_service_open() operation.
+ * during a [func@Service.get] or [func@Service.open] operation.
  */
 
 EGG_SECURE_DEFINE_GLIB_GLOBALS ();
@@ -377,7 +372,7 @@ secret_service_real_prompt_finish (SecretService *self,
 		return NULL;
 	}
 
-	return g_variant_ref_sink (retval);
+	return retval;
 }
 
 static void
@@ -587,15 +582,16 @@ secret_service_class_init (SecretServiceClass *klass)
 	g_object_class_override_property (object_class, PROP_FLAGS, "flags");
 
 	/**
-	 * SecretService:collections:
+	 * SecretService:collections: (attributes org.gtk.Property.get=secret_service_get_collections)
 	 *
-	 * A list of #SecretCollection objects representing the collections in
-	 * the Secret Service. This list may be %NULL if the collections have
-	 * not been loaded.
+	 * A list of [class@Collection] objects representing the collections in
+	 * the Secret Service.
+	 *
+	 * This list may be %NULL if the collections have not been loaded.
 	 *
 	 * To load the collections, specify the %SECRET_SERVICE_LOAD_COLLECTIONS
-	 * initialization flag when calling the secret_service_get() or
-	 * secret_service_open() functions. Or call the secret_service_load_collections()
+	 * initialization flag when calling the [func@Service.get] or
+	 * [func@Service.open] functions. Or call the [method@Service.load_collections]
 	 * method.
 	 */
 	g_object_class_install_property (object_class, PROP_COLLECTIONS,
@@ -614,7 +610,7 @@ static void
 init_closure_free (gpointer data)
 {
 	InitClosure *closure = data;
-	g_slice_free (InitClosure, closure);
+	g_free (closure);
 }
 
 static gboolean
@@ -722,17 +718,40 @@ secret_service_initable_iface (GInitableIface *iface)
 }
 
 static void
+secret_service_async_initable_init_async (GAsyncInitable *initable,
+                                          int io_priority,
+                                          GCancellable *cancellable,
+                                          GAsyncReadyCallback callback,
+                                          gpointer user_data);
+
+typedef struct {
+	GAsyncReadyCallback callback;
+	gpointer user_data;
+} InitBaseClosure;
+
+static void
 on_init_base (GObject *source,
               GAsyncResult *result,
               gpointer user_data)
 {
-	GTask *task = G_TASK (user_data);
+	GTask *base_task = G_TASK (user_data);
+	InitBaseClosure *base = g_task_get_task_data (base_task);
+	GCancellable *cancellable = g_task_get_cancellable (base_task);
+	GTask *task;
+	InitClosure *init;
 	SecretService *self = SECRET_SERVICE (source);
 	GError *error = NULL;
 
+	task = g_task_new (source, cancellable, base->callback, base->user_data);
+	g_task_set_source_tag (task, secret_service_async_initable_init_async);
+	init = g_new0 (InitClosure, 1);
+	g_task_set_task_data (task, init, init_closure_free);
+
+	g_clear_object (&base_task);
+
 	if (!secret_service_async_initable_parent_iface->init_finish (G_ASYNC_INITABLE (self),
 	                                                              result, &error)) {
-		g_task_return_error (task, error);
+		g_task_return_error (task, g_steal_pointer (&error));
 	} else {
 		service_ensure_for_flags_async (self, self->pv->init_flags, task);
 	}
@@ -748,12 +767,14 @@ secret_service_async_initable_init_async (GAsyncInitable *initable,
                                           gpointer user_data)
 {
 	GTask *task;
-	InitClosure *closure;
+	InitBaseClosure *base;
 
-	task = g_task_new (initable, cancellable, callback, user_data);
+	task = g_task_new (initable, cancellable, NULL, NULL);
 	g_task_set_source_tag (task, secret_service_async_initable_init_async);
-	closure = g_slice_new0 (InitClosure);
-	g_task_set_task_data (task, closure, init_closure_free);
+	base = g_new0 (InitBaseClosure, 1);
+	base->callback = callback;
+	base->user_data = user_data;
+	g_task_set_task_data (task, base, g_free);
 
 	secret_service_async_initable_parent_iface->init_async (initable,
 	                                                        io_priority,
@@ -801,7 +822,7 @@ secret_service_real_ensure_for_flags (SecretBackend *self,
 	g_return_if_fail (SECRET_IS_SERVICE (self));
 
 	task = g_task_new (self, cancellable, callback, user_data);
-	closure = g_slice_new0 (InitClosure);
+	closure = g_new0 (InitClosure, 1);
 	g_task_set_task_data (task, closure, init_closure_free);
 	service_ensure_for_flags_async (SECRET_SERVICE (self), flags, task);
 	g_object_unref (task);
@@ -947,12 +968,13 @@ secret_service_backend_iface (SecretBackendInterface *iface)
 /**
  * secret_service_get:
  * @flags: flags for which service functionality to ensure is initialized
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
- * Get a #SecretService proxy for the Secret Service. If such a proxy object
- * already exists, then the same proxy is returned.
+ * Get a #SecretService proxy for the Secret Service.
+ *
+ * If such a proxy object already exists, then the same proxy is returned.
  *
  * If @flags contains any flags of which parts of the secret service to
  * ensure are initialized, then those will be initialized before completing.
@@ -982,7 +1004,7 @@ secret_service_get (SecretServiceFlags flags,
 	} else {
 		task = g_task_new (service, cancellable, callback, user_data);
 		g_task_set_source_tag (task, secret_service_get);
-		closure = g_slice_new0 (InitClosure);
+		closure = g_new0 (InitClosure, 1);
 		closure->flags = flags;
 		g_task_set_task_data (task, closure, init_closure_free);
 
@@ -1002,7 +1024,7 @@ secret_service_get (SecretServiceFlags flags,
  * Secret Service.
  *
  * Returns: (transfer full): a new reference to a #SecretService proxy, which
- *          should be released with g_object_unref().
+ *   should be released with [method@GObject.Object.unref].
  */
 SecretService *
 secret_service_get_finish (GAsyncResult *result,
@@ -1045,11 +1067,12 @@ secret_service_get_finish (GAsyncResult *result,
 /**
  * secret_service_get_sync:
  * @flags: flags for which service functionality to ensure is initialized
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
- * Get a #SecretService proxy for the Secret Service. If such a proxy object
- * already exists, then the same proxy is returned.
+ * Get a #SecretService proxy for the Secret Service.
+ *
+ * If such a proxy object already exists, then the same proxy is returned.
  *
  * If @flags contains any flags of which parts of the secret service to
  * ensure are initialized, then those will be initialized before returning.
@@ -1058,7 +1081,7 @@ secret_service_get_finish (GAsyncResult *result,
  * threads.
  *
  * Returns: (transfer full): a new reference to a #SecretService proxy, which
- *          should be released with g_object_unref().
+ *   should be released with [method@GObject.Object.unref].
  */
 SecretService *
 secret_service_get_sync (SecretServiceFlags flags,
@@ -1090,8 +1113,8 @@ secret_service_get_sync (SecretServiceFlags flags,
 /**
  * secret_service_disconnect:
  *
- * Disconnect the default #SecretService proxy returned by secret_service_get()
- * and secret_service_get_sync().
+ * Disconnect the default #SecretService proxy returned by [func@Service.get]
+ * and [func@Service.get_sync].
  *
  * It is not necessary to call this function, but you may choose to do so at
  * program exit. It is useful for testing that memory is not leaked.
@@ -1109,15 +1132,15 @@ secret_service_disconnect (void)
 /**
  * secret_service_open:
  * @service_gtype: the GType of the new secret service
- * @service_bus_name: (allow-none): the D-Bus service name of the secret service
+ * @service_bus_name: (nullable): the D-Bus service name of the secret service
  * @flags: flags for which service functionality to ensure is initialized
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
  * Create a new #SecretService proxy for the Secret Service.
  *
- * This function is rarely used, see secret_service_get() instead.
+ * This function is rarely used, see [func@Service.get] instead.
  *
  * The @service_gtype argument should be set to %SECRET_TYPE_SERVICE or a the type
  * of a derived class.
@@ -1140,9 +1163,6 @@ secret_service_open (GType service_gtype,
 	g_return_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable));
 	g_return_if_fail (g_type_is_a (service_gtype, SECRET_TYPE_SERVICE));
 
-	if (service_bus_name == NULL)
-		service_bus_name = get_default_bus_name ();
-
 	g_async_initable_new_async (service_gtype, G_PRIORITY_DEFAULT,
 	                            cancellable, callback, user_data,
 	                            "flags", flags,
@@ -1158,7 +1178,7 @@ secret_service_open (GType service_gtype,
  * the Secret Service.
  *
  * Returns: (transfer full): a new reference to a #SecretService proxy, which
- *          should be released with g_object_unref().
+ *   should be released with [method@GObject.Object.unref].
  */
 SecretService *
 secret_service_open_finish (GAsyncResult *result,
@@ -1184,14 +1204,14 @@ secret_service_open_finish (GAsyncResult *result,
 /**
  * secret_service_open_sync:
  * @service_gtype: the GType of the new secret service
- * @service_bus_name: (allow-none): the D-Bus service name of the secret service
+ * @service_bus_name: (nullable): the D-Bus service name of the secret service
  * @flags: flags for which service functionality to ensure is initialized
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Create a new #SecretService proxy for the Secret Service.
  *
- * This function is rarely used, see secret_service_get_sync() instead.
+ * This function is rarely used, see [func@Service.get_sync] instead.
  *
  * The @service_gtype argument should be set to %SECRET_TYPE_SERVICE or a the
  * type of a derived class.
@@ -1205,7 +1225,7 @@ secret_service_open_finish (GAsyncResult *result,
  * threads.
  *
  * Returns: (transfer full): a new reference to a #SecretService proxy, which
- *          should be released with g_object_unref().
+ *   should be released with [method@GObject.Object.unref].
  */
 SecretService *
 secret_service_open_sync (GType service_gtype,
@@ -1216,9 +1236,6 @@ secret_service_open_sync (GType service_gtype,
 {
 	g_return_val_if_fail (cancellable == NULL || G_IS_CANCELLABLE (cancellable), NULL);
 	g_return_val_if_fail (g_type_is_a (service_gtype, SECRET_TYPE_SERVICE), NULL);
-
-	if (service_bus_name == NULL)
-		service_bus_name = get_default_bus_name ();
 
 	return g_initable_new (service_gtype, cancellable, error,
 	                       "flags", flags,
@@ -1232,7 +1249,7 @@ secret_service_open_sync (GType service_gtype,
  * Get the flags representing what features of the #SecretService proxy
  * have been initialized.
  *
- * Use secret_service_ensure_session() or secret_service_load_collections()
+ * Use [method@Service.ensure_session] or [method@Service.load_collections]
  * to initialize further features and change the flags.
  *
  * Returns: the flags for features initialized
@@ -1257,18 +1274,18 @@ secret_service_get_flags (SecretService *self)
 }
 
 /**
- * secret_service_get_collections:
+ * secret_service_get_collections: (attributes org.gtk.Method.get_property=collections)
  * @self: the secret service proxy
  *
- * Get a list of #SecretCollection objects representing all the collections
+ * Get a list of [class@Collection] objects representing all the collections
  * in the secret service.
  *
  * If the %SECRET_SERVICE_LOAD_COLLECTIONS flag was not specified when
  * initializing #SecretService proxy object, then this method will return
- * %NULL. Use secret_service_load_collections() to load the collections.
+ * %NULL. Use [method@Service.load_collections] to load the collections.
  *
- * Returns: (transfer full) (element-type Secret.Collection) (allow-none): a
- *          list of the collections in the secret service
+ * Returns: (transfer full) (element-type Secret.Collection) (nullable): a
+ *   list of the collections in the secret service
  */
 GList *
 secret_service_get_collections (SecretService *self)
@@ -1370,10 +1387,10 @@ _secret_service_take_session (SecretService *self,
  * secret service proxy and the Secret Service itself.
  *
  * This will be %NULL if no session has been established. Use
- * secret_service_ensure_session() to establish a session.
+ * [method@Service.ensure_session] to establish a session.
  *
- * Returns: (allow-none): a string representing the algorithms for transferring
- *          secrets
+ * Returns: (nullable): a string representing the algorithms for transferring
+ *   secrets
  */
 const gchar *
 secret_service_get_session_algorithms (SecretService *self)
@@ -1400,10 +1417,10 @@ secret_service_get_session_algorithms (SecretService *self)
  * secrets between this secret service proxy and the Secret Service itself.
  *
  * This will be %NULL if no session has been established. Use
- * secret_service_ensure_session() to establish a session.
+ * [method@Service.ensure_session] to establish a session.
  *
- * Returns: (allow-none): a string representing the D-Bus object path of the
- *          session
+ * Returns: (nullable): a string representing the D-Bus object path of the
+ *   session
  */
 const gchar *
 secret_service_get_session_dbus_path (SecretService *self)
@@ -1425,16 +1442,18 @@ secret_service_get_session_dbus_path (SecretService *self)
 /**
  * secret_service_ensure_session:
  * @self: the secret service
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
  * Ensure that the #SecretService proxy has established a session with the
- * Secret Service. This session is used to transfer secrets.
+ * Secret Service.
+ *
+ * This session is used to transfer secrets.
  *
  * It is not normally necessary to call this method, as the session is
  * established as necessary. You can also pass the %SECRET_SERVICE_OPEN_SESSION
- * to secret_service_get() in order to ensure that a session has been established
+ * to [func@Service.get] in order to ensure that a session has been established
  * by the time you get the #SecretService proxy.
  *
  * This method will return immediately and complete asynchronously.
@@ -1498,15 +1517,17 @@ secret_service_ensure_session_finish (SecretService *self,
 /**
  * secret_service_ensure_session_sync:
  * @self: the secret service
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Ensure that the #SecretService proxy has established a session with the
- * Secret Service. This session is used to transfer secrets.
+ * Secret Service.
+ *
+ * This session is used to transfer secrets.
  *
  * It is not normally necessary to call this method, as the session is
  * established as necessary. You can also pass the %SECRET_SERVICE_OPEN_SESSION
- * to secret_service_get_sync() in order to ensure that a session has been
+ * to [func@Service.get_sync] in order to ensure that a session has been
  * established by the time you get the #SecretService proxy.
  *
  * This method may block indefinitely and should not be used in user interface
@@ -1599,7 +1620,7 @@ ensure_closure_free (gpointer data)
 {
 	EnsureClosure *closure = data;
 	g_hash_table_unref (closure->collections);
-	g_slice_free (EnsureClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -1638,16 +1659,17 @@ on_ensure_collection (GObject *source,
 /**
  * secret_service_load_collections:
  * @self: the secret service
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
  * Ensure that the #SecretService proxy has loaded all the collections present
- * in the Secret Service. This affects the result of
- * secret_service_get_collections().
+ * in the Secret Service.
+ *
+ * This affects the result of [method@Service.get_collections].
  *
  * You can also pass the %SECRET_SERVICE_LOAD_COLLECTIONS to
- * secret_service_get_sync() in order to ensure that the collections have been
+ * [func@Service.get_sync] in order to ensure that the collections have been
  * loaded by the time you get the #SecretService proxy.
  *
  * This method will return immediately and complete asynchronously.
@@ -1673,7 +1695,7 @@ secret_service_load_collections (SecretService *self,
 
 	task = g_task_new (self, cancellable, callback, user_data);
 	g_task_set_source_tag (task, secret_service_load_collections);
-	closure = g_slice_new0 (EnsureClosure);
+	closure = g_new0 (EnsureClosure, 1);
 	closure->collections = collections_table_new ();
 	g_task_set_task_data (task, closure, ensure_closure_free);
 
@@ -1736,15 +1758,16 @@ secret_service_load_collections_finish (SecretService *self,
 /**
  * secret_service_load_collections_sync:
  * @self: the secret service
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Ensure that the #SecretService proxy has loaded all the collections present
- * in the Secret Service. This affects the result of
- * secret_service_get_collections().
+ * in the Secret Service.
+ *
+ * This affects the result of [method@Service.get_collections].
  *
  * You can also pass the %SECRET_SERVICE_LOAD_COLLECTIONS to
- * secret_service_get_sync() in order to ensure that the collections have been
+ * [func@Service.get_sync] in order to ensure that the collections have been
  * loaded by the time you get the #SecretService proxy.
  *
  * This method may block indefinitely and should not be used in user interface
@@ -1803,11 +1826,11 @@ secret_service_load_collections_sync (SecretService *self,
  * secret_service_prompt_sync:
  * @self: the secret service
  * @prompt: the prompt
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @return_type: the variant type of the prompt result
  * @error: location to place an error on failure
  *
- * Perform prompting for a #SecretPrompt.
+ * Perform prompting for a [class@Prompt].
  *
  * Runs a prompt and performs the prompting. Returns a variant result if the
  * prompt was completed and not dismissed. The type of result depends on the
@@ -1817,12 +1840,12 @@ secret_service_load_collections_sync (SecretService *self,
  * This function is called by other parts of this library to handle prompts
  * for the various actions that can require prompting.
  *
- * Override the #SecretServiceClass <literal>prompt_sync</literal> virtual method
+ * Override the #SecretServiceClass [vfunc@Service.prompt_sync] virtual method
  * to change the behavior of the prompting. The default behavior is to simply
- * run secret_prompt_perform_sync() on the prompt with a %NULL <literal>window_id</literal>.
+ * run [method@Prompt.perform_sync] on the prompt with a %NULL `window_id`.
  *
  * Returns: (transfer full): %NULL if the prompt was dismissed or an error occurred,
- *          a variant result if the prompt was successful
+ *   a variant result if the prompt was successful
  */
 GVariant *
 secret_service_prompt_sync (SecretService *self,
@@ -1848,19 +1871,19 @@ secret_service_prompt_sync (SecretService *self,
  * secret_service_prompt:
  * @self: the secret service
  * @prompt: the prompt
- * @return_type: (allow-none): the variant type of the prompt result
- * @cancellable: optional cancellation object
+ * @return_type: (nullable): the variant type of the prompt result
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  *
- * Perform prompting for a #SecretPrompt.
+ * Perform prompting for a [class@Prompt].
  *
  * This function is called by other parts of this library to handle prompts
  * for the various actions that can require prompting.
  *
- * Override the #SecretServiceClass <literal>prompt_async</literal> virtual method
+ * Override the #SecretServiceClass [vfunc@Service.prompt_async] virtual method
  * to change the behavior of the prompting. The default behavior is to simply
- * run secret_prompt_perform() on the prompt.
+ * run [method@Prompt.perform] on the prompt.
  */
 void
 secret_service_prompt (SecretService *self,
@@ -1888,14 +1911,14 @@ secret_service_prompt (SecretService *self,
  * @result: the asynchronous result passed to the callback
  * @error: location to place an error on failure
  *
- * Complete asynchronous operation to perform prompting for a #SecretPrompt.
+ * Complete asynchronous operation to perform prompting for a [class@Prompt].
  *
  * Returns a variant result if the prompt was completed and not dismissed. The
  * type of result depends on the action the prompt is completing, and is defined
  * in the Secret Service DBus API specification.
  *
  * Returns: (transfer full): %NULL if the prompt was dismissed or an error occurred,
- *          a variant result if the prompt was successful
+ *   a variant result if the prompt was successful
  */
 GVariant *
 secret_service_prompt_finish (SecretService *self,
@@ -1919,7 +1942,8 @@ secret_service_prompt_finish (SecretService *self,
  * @self: the secret service
  *
  * Get the GObject type for collections instantiated by this service.
- * This will always be either #SecretCollection or derived from it.
+ *
+ * This will always be either [class@Collection] or derived from it.
  *
  * Returns: the gobject type for collections
  */
@@ -1947,7 +1971,8 @@ secret_service_get_collection_gtype (SecretService *self)
  * @self: the service
  *
  * Get the GObject type for items instantiated by this service.
- * This will always be either #SecretItem or derived from it.
+ *
+ * This will always be either [class@Item] or derived from it.
  *
  * Returns: the gobject type for items
  */

@@ -22,6 +22,7 @@
 #include "secret-retrievable.h"
 
 #include "egg/egg-secure-memory.h"
+#include "egg/egg-tpm2.h"
 
 EGG_SECURE_DECLARE (secret_file_backend);
 
@@ -32,6 +33,7 @@ EGG_SECURE_DECLARE (secret_file_backend);
 #define PORTAL_BUS_NAME "org.freedesktop.portal.Desktop"
 #define PORTAL_OBJECT_PATH "/org/freedesktop/portal/desktop"
 #define PORTAL_REQUEST_INTERFACE "org.freedesktop.portal.Request"
+#define PORTAL_REQUEST_PATH_PREFIX "/org/freedesktop/portal/desktop/request/"
 #define PORTAL_SECRET_INTERFACE "org.freedesktop.portal.Secret"
 #define PORTAL_SECRET_VERSION 1
 
@@ -58,6 +60,51 @@ enum {
 	PROP_0,
 	PROP_FLAGS
 };
+
+/* Gets the GFile for this backend and makes sure the parent dirs exist */
+static GFile *
+get_secret_file (GCancellable *cancellable, GError **error)
+{
+	const char *envvar = NULL;
+	char *path = NULL;
+	GFile *file = NULL;
+	GFile *dir = NULL;
+	gboolean ret;
+
+	envvar = g_getenv ("SECRET_FILE_TEST_PATH");
+	if (envvar != NULL && *envvar != '\0') {
+		path = g_strdup (envvar);
+	} else {
+		path = g_build_filename (g_get_user_data_dir (),
+		                         "keyrings",
+		                         SECRET_COLLECTION_DEFAULT ".keyring",
+		                         NULL);
+	}
+
+	file = g_file_new_for_path (path);
+	g_free (path);
+
+	dir = g_file_get_parent (file);
+	if (dir == NULL) {
+		g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+		             "not a valid path");
+		g_object_unref (file);
+		return NULL;
+	}
+
+	ret = g_file_make_directory_with_parents (dir, cancellable, error);
+	g_object_unref (dir);
+	if (!ret) {
+		if (!g_error_matches (*error, G_IO_ERROR, G_IO_ERROR_EXISTS)) {
+			g_object_unref (file);
+			return NULL;
+		}
+
+		g_clear_error (error);
+	}
+
+	return file;
+}
 
 static void
 secret_file_backend_init (SecretFileBackend *self)
@@ -160,7 +207,9 @@ typedef struct {
 	GDBusConnection *connection;
 	gchar *request_path;
 	guint portal_signal_id;
+	GCancellable *cancellable;
 	gulong cancellable_signal_id;
+	gchar *sender;
 } InitClosure;
 
 static void
@@ -172,7 +221,16 @@ init_closure_free (gpointer data)
 	g_clear_pointer (&init->buffer, egg_secure_free);
 	g_clear_object (&init->connection);
 	g_clear_pointer (&init->request_path, g_free);
-	g_slice_free (InitClosure, init);
+	g_clear_pointer (&init->sender, g_free);
+	if (init->cancellable_signal_id) {
+		g_cancellable_disconnect (init->cancellable, init->cancellable_signal_id);
+		init->cancellable_signal_id = 0;
+	}
+	/* Note: do not cancel the cancellable here! That's for the API user to
+	 * do. We're just keeping track of it here so we can disconnect.
+	 */
+	g_clear_object (&init->cancellable);
+	g_free (init);
 }
 
 #define PASSWORD_SIZE 64
@@ -306,9 +364,6 @@ on_portal_cancel (GCancellable *cancellable,
 				cancellable,
 				on_portal_request_close,
 				task);
-
-	g_cancellable_disconnect (cancellable, init->cancellable_signal_id);
-	init->cancellable_signal_id = 0;
 }
 
 static void
@@ -333,20 +388,7 @@ on_portal_retrieve_secret (GObject *source_object,
 		return;
 	}
 
-	g_variant_get (reply, "(o)", &init->request_path);
 	g_variant_unref (reply);
-
-	init->portal_signal_id =
-		g_dbus_connection_signal_subscribe (connection,
-						    PORTAL_BUS_NAME,
-						    PORTAL_REQUEST_INTERFACE,
-						    "Response",
-						    init->request_path,
-						    NULL,
-						    G_DBUS_SIGNAL_FLAGS_NO_MATCH_RULE,
-						    on_portal_response,
-						    task,
-						    NULL);
 
 	if (cancellable != NULL)
 		init->cancellable_signal_id =
@@ -369,6 +411,7 @@ on_bus_get (GObject *source_object,
 	gint fd_index;
 	GVariantBuilder options;
 	GError *error = NULL;
+	gchar *token;
 
 	connection = g_bus_get_finish (result, &error);
 	if (connection == NULL) {
@@ -376,12 +419,21 @@ on_bus_get (GObject *source_object,
 		g_object_unref (task);
 		return;
 	}
+
+	token = g_strdup_printf ("libsecret%d", g_random_int_range (0, G_MAXINT));
+
 	init->connection = connection;
+	init->sender = g_strdup (g_dbus_connection_get_unique_name (connection) + 1);
+	/* We modify the string in place, see
+	 * https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Request.html */
+	g_strdelimit (init->sender, ".", '_');
+	init->request_path = g_strconcat (PORTAL_REQUEST_PATH_PREFIX, init->sender, "/", token, NULL);
 
 	if (!g_unix_open_pipe (fds, FD_CLOEXEC, &error)) {
 		g_object_unref (connection);
 		g_task_return_error (task, error);
 		g_object_unref (task);
+		g_free (token);
 		return;
 	}
 
@@ -394,13 +446,27 @@ on_bus_get (GObject *source_object,
 		g_object_unref (connection);
 		g_task_return_error (task, error);
 		g_object_unref (task);
+		g_free (token);
 		return;
 	}
 
-	close (fds[1]);
 	init->stream = g_unix_input_stream_new (fds[0], TRUE);
 
 	g_variant_builder_init (&options, G_VARIANT_TYPE_VARDICT);
+	g_variant_builder_add (&options, "{sv}", "handle_token", g_variant_new_string (token));
+
+	init->portal_signal_id =
+		g_dbus_connection_signal_subscribe (connection,
+						    PORTAL_BUS_NAME,
+						    PORTAL_REQUEST_INTERFACE,
+						    "Response",
+						    init->request_path,
+						    NULL,
+						    G_DBUS_SIGNAL_FLAGS_NO_MATCH_RULE,
+						    on_portal_response,
+						    task,
+						    NULL);
+
 	g_dbus_connection_call_with_unix_fd_list (connection,
 						  PORTAL_BUS_NAME,
 						  PORTAL_OBJECT_PATH,
@@ -417,7 +483,79 @@ on_bus_get (GObject *source_object,
 						  on_portal_retrieve_secret,
 						  task);
 	g_object_unref (fd_list);
+	g_free (token);
 }
+
+#ifdef WITH_TPM
+static GBytes *
+load_password_from_tpm (GFile *file, GCancellable *cancellable, GError **error)
+{
+	EggTpm2Context *context = NULL;
+	char *path = NULL;
+	char *tpm2_file_path = NULL;
+	GFile *tpm2_file = NULL;
+	gboolean status;
+	GBytes *encrypted = NULL;
+	GBytes *decrypted = NULL;
+
+	context = egg_tpm2_initialize (error);
+	if (!context)
+		return NULL;
+
+	path = g_file_get_path (file);
+	tpm2_file_path = g_strdup_printf ("%s.tpm2", path);
+	g_free (path);
+
+	tpm2_file = g_file_new_for_path (tpm2_file_path);
+	status = g_file_test (tpm2_file_path, G_FILE_TEST_EXISTS);
+	g_free (tpm2_file_path);
+
+	if (!status) {
+		gconstpointer contents;
+		gsize size;
+
+		encrypted = egg_tpm2_generate_master_password (context, error);
+		if (!encrypted)
+			return NULL;
+
+		contents = g_bytes_get_data (encrypted, &size);
+		status = g_file_replace_contents (tpm2_file,
+		                                  contents,
+		                                  size,
+		                                  NULL,
+		                                  FALSE,
+		                                  G_FILE_CREATE_PRIVATE,
+		                                  NULL,
+		                                  cancellable,
+		                                  error);
+		if (!status)
+			goto out;
+	} else {
+		char *contents;
+		gsize length;
+
+		status = g_file_load_contents (tpm2_file,
+		                               cancellable,
+		                               &contents,
+		                               &length,
+		                               NULL,
+		                               error);
+		if (!status)
+			goto out;
+
+		encrypted = g_bytes_new_take (contents, length);
+	}
+
+	decrypted = egg_tpm2_decrypt_master_password (context, encrypted, error);
+
+out:
+	g_clear_object (&tpm2_file);
+	g_clear_pointer (&encrypted, g_bytes_unref);
+	egg_tpm2_finalize (context);
+
+	return decrypted;
+}
+#endif /* WITH_TPM */
 
 static void
 secret_file_backend_real_init_async (GAsyncInitable *initable,
@@ -426,53 +564,20 @@ secret_file_backend_real_init_async (GAsyncInitable *initable,
 				     GAsyncReadyCallback callback,
 				     gpointer user_data)
 {
-	gchar *path;
-	GFile *file;
-	GFile *dir;
+	const char *envvar = NULL;
+	GFile *file = NULL;
 	SecretValue *password;
-	const gchar *envvar;
 	GTask *task;
 	GError *error = NULL;
 	InitClosure *init;
-	gboolean ret;
 
 	task = g_task_new (initable, cancellable, callback, user_data);
 
-	envvar = g_getenv ("SECRET_FILE_TEST_PATH");
-	if (envvar != NULL && *envvar != '\0')
-		path = g_strdup (envvar);
-	else {
-		path = g_build_filename (g_get_user_data_dir (),
-					 "keyrings",
-					 SECRET_COLLECTION_DEFAULT ".keyring",
-					 NULL);
-	}
-
-	file = g_file_new_for_path (path);
-	g_free (path);
-
-	dir = g_file_get_parent (file);
-	if (dir == NULL) {
-		g_task_return_new_error (task,
-					 G_IO_ERROR,
-					 G_IO_ERROR_INVALID_ARGUMENT,
-					 "not a valid path");
-		g_object_unref (file);
+	file = get_secret_file (cancellable, &error);
+	if (file == NULL) {
+		g_task_return_error (task, g_steal_pointer (&error));
 		g_object_unref (task);
 		return;
-	}
-
-	ret = g_file_make_directory_with_parents (dir, cancellable, &error);
-	g_object_unref (dir);
-	if (!ret) {
-		if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_EXISTS))
-			g_clear_error (&error);
-		else {
-			g_task_return_error (task, error);
-			g_object_unref (file);
-			g_object_unref (task);
-			return;
-		}
 	}
 
 	envvar = g_getenv ("SECRET_FILE_TEST_PASSWORD");
@@ -488,19 +593,49 @@ secret_file_backend_real_init_async (GAsyncInitable *initable,
 					    NULL);
 		g_object_unref (file);
 		secret_value_unref (password);
-	} else if (g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS)) {
-		init = g_slice_new0 (InitClosure);
+	} else if (g_file_test ("/.flatpak-info", G_FILE_TEST_EXISTS) || g_getenv ("SNAP_NAME") != NULL) {
+		init = g_new0 (InitClosure, 1);
 		init->io_priority = io_priority;
 		init->file = file;
+		if (cancellable)
+			init->cancellable = g_object_ref (cancellable);
 		g_task_set_task_data (task, init, init_closure_free);
 		g_bus_get (G_BUS_TYPE_SESSION, cancellable, on_bus_get, task);
 	} else {
+#ifdef WITH_TPM
+		GBytes *decrypted = NULL;
+		gconstpointer data;
+		gsize size;
+
+		decrypted = load_password_from_tpm (file, cancellable, &error);
+		if (!decrypted) {
+			g_task_return_error (task, error);
+			g_object_unref (task);
+			return;
+		}
+
+		data = g_bytes_get_data (decrypted, &size);
+		password = secret_value_new (data,size, "text/plain");
+		g_bytes_unref (decrypted);
+		g_async_initable_new_async (SECRET_TYPE_FILE_COLLECTION,
+					    io_priority,
+					    cancellable,
+					    on_collection_new_async,
+					    task,
+					    "file", file,
+					    "password", password,
+					    NULL);
+
+		g_object_unref (file);
+		secret_value_unref (password);
+		return;
+#else
 		g_task_return_new_error (task,
 					 G_IO_ERROR,
 					 G_IO_ERROR_INVALID_ARGUMENT,
 					 "master password is not retrievable");
 		g_object_unref (task);
-		return;
+#endif
 	}
 }
 

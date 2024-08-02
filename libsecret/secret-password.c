@@ -24,33 +24,13 @@
 #include <egg/egg-secure-memory.h>
 
 /**
- * SECTION:secret-password
- * @title: Password storage
- * @short_description: Simple password storage and lookup
- *
- * This is a simple API for storing passwords and retrieving passwords in the
- * Secret Service.
- *
- * Each password is associated with a set of attributes. Attribute values can
- * be either strings, integers or booleans.
- *
- * The names and types of allowed attributes for a given password are defined
- * with a schema. Certain schemas are predefined. Additional schemas can be
- * defined via the %SecretSchema structure.
- *
- * Each of the functions accept a variable list of attributes names and their
- * values. Include a %NULL to terminate the list of attributes.
- *
- * Stability: Stable
- */
-
-/**
  * secret_password_store: (skip)
  * @schema: the schema for attributes
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
  * @password: the null-terminated password to store
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  * @...: the attribute keys and values, terminated with %NULL
@@ -60,13 +40,13 @@
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the @schema.
- * The list of attribtues should be terminated with a %NULL.
+ * The list of attributes should be terminated with a %NULL.
  *
  * If the attributes match a secret item already stored in the collection, then
  * the item will be updated with these new values.
  *
  * If @collection is %NULL, then the default collection will be
- * used. Use #SECRET_COLLECTION_SESSION to store the password in the session
+ * used. Use [const@COLLECTION_SESSION] to store the password in the session
  * collection, which doesn't get stored across login sessions.
  *
  * This method will return immediately and complete asynchronously.
@@ -120,7 +100,7 @@ store_closure_free (gpointer data)
 	g_free (store->collection);
 	g_free (store->label);
 	secret_value_unref (store->value);
-	g_slice_free (StoreClosure, store);
+	g_free (store);
 }
 
 static void
@@ -178,10 +158,11 @@ on_store_backend (GObject *source,
  * secret_password_storev: (rename-to secret_password_store)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8) (transfer full): the attribute keys and values
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
  * @password: the null-terminated password to store
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: (scope async): called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -193,7 +174,7 @@ on_store_backend (GObject *source,
  * the item will be updated with these new values.
  *
  * If @collection is %NULL, then the default collection will be
- * used. Use #SECRET_COLLECTION_SESSION to store the password in the session
+ * used. Use [const@COLLECTION_SESSION] to store the password in the session
  * collection, which doesn't get stored across login sessions.
  *
  * This method will return immediately and complete asynchronously.
@@ -221,7 +202,7 @@ secret_password_storev (const SecretSchema *schema,
 		return;
 
 	task = g_task_new (NULL, cancellable, callback, user_data);
-	store = g_slice_new0 (StoreClosure);
+	store = g_new0 (StoreClosure, 1);
 	store->schema = _secret_schema_ref_if_nonstatic (schema);
 	store->attributes = g_hash_table_ref (attributes);
 	store->collection = g_strdup (collection);
@@ -237,18 +218,19 @@ secret_password_storev (const SecretSchema *schema,
 /**
  * secret_password_store_binary: (skip)
  * @schema: the schema for attributes
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *    collection where to store the secret
  * @label: label for the secret
- * @value: a #SecretValue
- * @cancellable: optional cancellation object
+ * @value: a [struct@Value]
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  * @...: the attribute keys and values, terminated with %NULL
  *
  * Store a password in the secret service.
  *
- * This is similar to secret_password_store(), but takes a
- * #SecretValue as the argument instead of a null-terminated password.
+ * This is similar to [func@password_store], but takes a
+ * [struct@Value] as the argument instead of a null-terminated password.
  *
  * This method will return immediately and complete asynchronously.
  *
@@ -290,17 +272,18 @@ secret_password_store_binary (const SecretSchema *schema,
  * secret_password_storev_binary: (rename-to secret_password_store_binary)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8) (transfer full): the attribute keys and values
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
- * @value: a #SecretValue
- * @cancellable: optional cancellation object
+ * @value: a [struct@Value]
+ * @cancellable: (nullable): optional cancellation object
  * @callback: (scope async): called when the operation completes
  * @user_data: data to be passed to the callback
  *
  * Store a password in the secret service.
  *
- * This is similar to secret_password_storev(), but takes a
- * #SecretValue as the argument instead of a null-terminated password.
+ * This is similar to [func@password_storev], but takes a
+ * [struct@Value] as the argument instead of a null-terminated password.
  *
  * This method will return immediately and complete asynchronously.
  *
@@ -329,7 +312,7 @@ secret_password_storev_binary (const SecretSchema *schema,
 		return;
 
 	task = g_task_new (NULL, cancellable, callback, user_data);
-	store = g_slice_new0 (StoreClosure);
+	store = g_new0 (StoreClosure, 1);
 	store->schema = _secret_schema_ref_if_nonstatic (schema);
 	store->attributes = g_hash_table_ref (attributes);
 	store->collection = g_strdup (collection);
@@ -364,10 +347,11 @@ secret_password_store_finish (GAsyncResult *result,
 /**
  * secret_password_store_sync:
  * @schema: the schema for attributes
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
  * @password: the null-terminated password to store
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
@@ -376,13 +360,13 @@ secret_password_store_finish (GAsyncResult *result,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the @schema.
- * The list of attribtues should be terminated with a %NULL.
+ * The list of attributes should be terminated with a %NULL.
  *
  * If the attributes match a secret item already stored in the collection, then
  * the item will be updated with these new values.
  *
  * If @collection is %NULL, then the default collection will be
- * used. Use #SECRET_COLLECTION_SESSION to store the password in the session
+ * used. Use [const@COLLECTION_SESSION] to store the password in the session
  * collection, which doesn't get stored across login sessions.
  *
  * This method may block indefinitely and should not be used in user interface
@@ -428,10 +412,11 @@ secret_password_store_sync (const SecretSchema *schema,
  * secret_password_storev_sync: (rename-to secret_password_store_sync)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
  * @password: the null-terminated password to store
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Store a password in the secret service.
@@ -442,7 +427,7 @@ secret_password_store_sync (const SecretSchema *schema,
  * the item will be updated with these new values.
  *
  * If @collection is %NULL, then the default collection will be
- * used. Use #SECRET_COLLECTION_SESSION to store the password in the session
+ * used. Use [const@COLLECTION_SESSION] to store the password in the session
  * collection, which doesn't get stored across login sessions.
  *
  * This method may block indefinitely and should not be used in user interface
@@ -491,17 +476,18 @@ secret_password_storev_sync (const SecretSchema *schema,
 /**
  * secret_password_store_binary_sync:
  * @schema: the schema for attributes
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
- * @value: a #SecretValue
- * @cancellable: optional cancellation object
+ * @value: a [struct@Value]
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
  * Store a password in the secret service.
  *
- * This is similar to secret_password_store_sync(), but takes a
- * #SecretValue as the argument instead of a null terminated password.
+ * This is similar to [func@password_store_sync], but takes a
+ * [struct@Value] as the argument instead of a null terminated password.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
@@ -548,16 +534,17 @@ secret_password_store_binary_sync (const SecretSchema *schema,
  * secret_password_storev_binary_sync: (rename-to secret_password_store_binary_sync)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @collection: (allow-none): a collection alias, or D-Bus object path of the collection where to store the secret
+ * @collection: (nullable): a collection alias, or D-Bus object path of the
+ *   collection where to store the secret
  * @label: label for the secret
- * @value: a #SecretValue
- * @cancellable: optional cancellation object
+ * @value: a [struct@Value]
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Store a password in the secret service.
  *
- * This is similar to secret_password_storev_sync(), but takes a
- * #SecretValue as the argument instead of a null-terminated passwords.
+ * This is similar to [func@password_storev_sync], but takes a [struct@Value] as
+ * the argument instead of a null-terminated passwords.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
@@ -607,7 +594,7 @@ secret_password_storev_binary_sync (const SecretSchema *schema,
 /**
  * secret_password_lookup: (skip)
  * @schema: the schema for the attributes
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  * @...: the attribute keys and values, terminated with %NULL
@@ -617,7 +604,7 @@ secret_password_storev_binary_sync (const SecretSchema *schema,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * If no secret is found then %NULL is returned.
  *
@@ -661,7 +648,7 @@ lookup_closure_free (gpointer data)
 	LookupClosure *closure = data;
 	_secret_schema_unref_if_nonstatic (closure->schema);
 	g_hash_table_unref (closure->attributes);
-	g_slice_free (LookupClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -723,7 +710,7 @@ on_lookup_backend (GObject *source,
  * secret_password_lookupv: (rename-to secret_password_lookup)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8) (transfer full): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: (scope async): called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -753,7 +740,7 @@ secret_password_lookupv (const SecretSchema *schema,
 		return;
 
 	task = g_task_new (NULL, cancellable, callback, user_data);
-	lookup = g_slice_new0 (LookupClosure);
+	lookup = g_new0 (LookupClosure, 1);
 	lookup->schema = _secret_schema_ref_if_nonstatic (schema);
 	lookup->attributes = g_hash_table_ref (attributes);
 	g_task_set_task_data (task, lookup, lookup_closure_free);
@@ -771,7 +758,7 @@ secret_password_lookupv (const SecretSchema *schema,
  * Finish an asynchronous operation to lookup a password in the secret service.
  *
  * Returns: (transfer full): a new password string stored in nonpageable memory
- *          which must be freed with secret_password_free() when done
+ *   which must be freed with [func@password_free] when done
  */
 gchar *
 secret_password_lookup_nonpageable_finish (GAsyncResult *result,
@@ -796,8 +783,8 @@ secret_password_lookup_nonpageable_finish (GAsyncResult *result,
  *
  * Finish an asynchronous operation to lookup a password in the secret service.
  *
- * Returns: (transfer full): a newly allocated #SecretValue, which should be
- *          released with secret_value_unref(), or %NULL if no secret found
+ * Returns: (transfer full): a newly allocated [struct@Value], which should be
+ *   released with [method@Value.unref], or %NULL if no secret found
  *
  * Since: 0.19.0
  */
@@ -819,7 +806,7 @@ secret_password_lookup_binary_finish (GAsyncResult *result,
  * Finish an asynchronous operation to lookup a password in the secret service.
  *
  * Returns: (transfer full): a new password string which should be freed with
- *          secret_password_free() or may be freed with g_free() when done
+ *   [func@password_free] or may be freed with [func@GLib.free] when done
  */
 gchar *
 secret_password_lookup_finish (GAsyncResult *result,
@@ -840,7 +827,7 @@ secret_password_lookup_finish (GAsyncResult *result,
 /**
  * secret_password_lookup_sync: (skip)
  * @schema: the schema for the attributes
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
@@ -857,7 +844,7 @@ secret_password_lookup_finish (GAsyncResult *result,
  * threads.
  *
  * Returns: (transfer full): a new password string which should be freed with
- *          secret_password_free() or may be freed with g_free() when done
+ *   [func@password_free] or may be freed with [func@GLib.free] when done
  */
 gchar *
 secret_password_lookup_sync (const SecretSchema *schema,
@@ -892,7 +879,7 @@ secret_password_lookup_sync (const SecretSchema *schema,
 /**
  * secret_password_lookup_nonpageable_sync: (skip)
  * @schema: the schema for the attributes
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
@@ -901,7 +888,7 @@ secret_password_lookup_sync (const SecretSchema *schema,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * If no secret is found then %NULL is returned.
  *
@@ -909,7 +896,7 @@ secret_password_lookup_sync (const SecretSchema *schema,
  * threads.
  *
  * Returns: (transfer full): a new password string stored in nonpageable memory
- *          which must be freed with secret_password_free() when done
+ *   which must be freed with [func@password_free] when done
  */
 gchar *
 secret_password_lookup_nonpageable_sync (const SecretSchema *schema,
@@ -945,7 +932,7 @@ secret_password_lookup_nonpageable_sync (const SecretSchema *schema,
  * secret_password_lookupv_nonpageable_sync: (skip)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Lookup a password in the secret service.
@@ -958,7 +945,7 @@ secret_password_lookup_nonpageable_sync (const SecretSchema *schema,
  * threads.
  *
  * Returns: (transfer full): a new password string stored in non pageable memory
- *          which should be freed with secret_password_free() when done
+ *   which should be freed with [func@password_free] when done
  */
 gchar *
 secret_password_lookupv_nonpageable_sync (const SecretSchema *schema,
@@ -996,20 +983,20 @@ secret_password_lookupv_nonpageable_sync (const SecretSchema *schema,
 /**
  * secret_password_lookup_binary_sync: (skip)
  * @schema: the schema for the attributes
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
  * Lookup a password in the secret service.
  *
- * This is similar to secret_password_lookup_sync(), but returns a
- * #SecretValue instead of a null-terminated password.
+ * This is similar to [func@password_lookup_sync], but returns a
+ * [struct@Value] instead of a null-terminated password.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
  *
- * Returns: (transfer full): a newly allocated #SecretValue, which should be
- *          released with secret_value_unref(), or %NULL if no secret found
+ * Returns: (transfer full): a newly allocated [struct@Value], which should be
+ *   released with [method@Value.unref], or %NULL if no secret found
  *
  * Since: 0.19.0
  */
@@ -1047,19 +1034,19 @@ secret_password_lookup_binary_sync (const SecretSchema *schema,
  * secret_password_lookupv_binary_sync: (skip)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Lookup a password in the secret service.
  *
- * This is similar to secret_password_lookupv_sync(), but returns a
- * #SecretValue instead of a null-terminated password.
+ * This is similar to [func@password_lookupv_sync], but returns a
+ * [struct@Value] instead of a null-terminated password.
  *
  * This method may block indefinitely and should not be used in user interface
  * threads.
  *
- * Returns: (transfer full): a newly allocated #SecretValue, which should be
- *          released with secret_value_unref(), or %NULL if no secret found
+ * Returns: (transfer full): a newly allocated [struct@Value], which should be
+ *   released with [method@Value.unref], or %NULL if no secret found
  *
  * Since: 0.19.0
  */
@@ -1100,7 +1087,7 @@ secret_password_lookupv_binary_sync (const SecretSchema *schema,
  * secret_password_lookupv_sync: (rename-to secret_password_lookup_sync)
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Lookup a password in the secret service.
@@ -1113,7 +1100,7 @@ secret_password_lookupv_binary_sync (const SecretSchema *schema,
  * threads.
  *
  * Returns: (transfer full): a new password string which should be freed with
- *          secret_password_free() or may be freed with g_free() when done
+ *   [func@password_free] or may be freed with [func@GLib.free] when done
  */
 gchar *
 secret_password_lookupv_sync (const SecretSchema *schema,
@@ -1151,7 +1138,7 @@ secret_password_lookupv_sync (const SecretSchema *schema,
 /**
  * secret_password_clear:
  * @schema: the schema for the attributes
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  * @...: the attribute keys and values, terminated with %NULL
@@ -1161,7 +1148,7 @@ secret_password_lookupv_sync (const SecretSchema *schema,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * All unlocked items that match the attributes will be deleted.
  *
@@ -1205,7 +1192,7 @@ clear_closure_free (gpointer data)
 	ClearClosure *closure = data;
 	_secret_schema_unref_if_nonstatic (closure->schema);
 	g_hash_table_unref (closure->attributes);
-	g_slice_free (ClearClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -1265,7 +1252,7 @@ on_clear_backend (GObject *source,
  * secret_password_clearv: (rename-to secret_password_clear)
  * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8) (transfer full): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: (scope async): called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -1295,7 +1282,7 @@ secret_password_clearv (const SecretSchema *schema,
 		return;
 
 	task = g_task_new (NULL, cancellable, callback, user_data);
-	clear = g_slice_new0 (ClearClosure);
+	clear = g_new0 (ClearClosure, 1);
 	clear->schema = _secret_schema_ref_if_nonstatic (schema);
 	clear->attributes = g_hash_table_ref (attributes);
 	g_task_set_task_data (task, clear, clear_closure_free);
@@ -1328,7 +1315,7 @@ secret_password_clear_finish (GAsyncResult *result,
 /**
  * secret_password_clear_sync:
  * @schema: the schema for the attributes
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
@@ -1337,7 +1324,7 @@ secret_password_clear_finish (GAsyncResult *result,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * All unlocked items that match the attributes will be deleted.
  *
@@ -1380,7 +1367,7 @@ secret_password_clear_sync (const SecretSchema* schema,
  * secret_password_clearv_sync: (rename-to secret_password_clear_sync)
  * @schema: (nullable): the schema for the attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Remove unlocked matching passwords from the secret service.
@@ -1431,7 +1418,7 @@ secret_password_clearv_sync (const SecretSchema *schema,
  * secret_password_search: (skip)
  * @schema: the schema for the attributes
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: called when the operation completes
  * @user_data: data to be passed to the callback
  * @...: the attribute keys and values, terminated with %NULL
@@ -1441,7 +1428,7 @@ secret_password_clearv_sync (const SecretSchema *schema,
  * The variable argument list should contain pairs of a) The attribute name as
  * a null-terminated string, followed by b) attribute value, either a character
  * string, an int number, or a gboolean value, as defined in the password
- * @schema. The list of attribtues should be terminated with a %NULL.
+ * @schema. The list of attributes should be terminated with a %NULL.
  *
  * This method will return immediately and complete asynchronously.
  *
@@ -1487,7 +1474,7 @@ search_closure_free (gpointer data)
 	SearchClosure *closure = data;
 	_secret_schema_unref_if_nonstatic (closure->schema);
 	g_hash_table_unref (closure->attributes);
-	g_slice_free (SearchClosure, closure);
+	g_free (closure);
 }
 
 static void
@@ -1555,7 +1542,7 @@ on_search_backend (GObject *source,
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8) (transfer full): the attribute keys and values
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @callback: (scope async): called when the operation completes
  * @user_data: data to be passed to the callback
  *
@@ -1586,7 +1573,7 @@ secret_password_searchv (const SecretSchema *schema,
                 return;
 
 	task = g_task_new (NULL, cancellable, callback, user_data);
-	search = g_slice_new0 (SearchClosure);
+	search = g_new0 (SearchClosure, 1);
 	search->schema = _secret_schema_ref_if_nonstatic (schema);
 	search->attributes = g_hash_table_ref (attributes);
 	search->flags = flags;
@@ -1605,7 +1592,7 @@ secret_password_searchv (const SecretSchema *schema,
  * Finish an asynchronous operation to search for items in the secret service.
  *
  * Returns: (transfer full) (element-type Secret.Retrievable): a list of
- *          #SecretRetrievable containing attributes of the matched items
+ *   [iface@Retrievable] containing attributes of the matched items
  *
  * Since: 0.19.0
  */
@@ -1623,7 +1610,7 @@ secret_password_search_finish (GAsyncResult *result,
  * secret_password_search_sync: (skip)
  * @schema: the schema for the attributes
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  * @...: the attribute keys and values, terminated with %NULL
  *
@@ -1640,7 +1627,7 @@ secret_password_search_finish (GAsyncResult *result,
  * threads.
  *
  * Returns: (transfer full) (element-type Secret.Retrievable): a list of
- *          #SecretRetrievable containing attributes of the matched items
+ *   [iface@Retrievable] containing attributes of the matched items
  *
  * Since: 0.19.0
  */
@@ -1680,7 +1667,7 @@ secret_password_search_sync (const SecretSchema *schema,
  * @schema: (nullable): the schema for attributes
  * @attributes: (element-type utf8 utf8): the attribute keys and values
  * @flags: search option flags
- * @cancellable: optional cancellation object
+ * @cancellable: (nullable): optional cancellation object
  * @error: location to place an error on failure
  *
  * Search for items in the secret service.
@@ -1693,7 +1680,7 @@ secret_password_search_sync (const SecretSchema *schema,
  * threads.
  *
  * Returns: (transfer full) (element-type Secret.Retrievable): a list of
- *          #SecretRetrievable containing attributes of the matched items
+ *   [iface@Retrievable] containing attributes of the matched items
  *
  * Since: 0.19.0
  */
@@ -1733,14 +1720,14 @@ secret_password_searchv_sync (const SecretSchema *schema,
 
 /**
  * secret_password_free: (skip)
- * @password: (allow-none): password to free
+ * @password: (nullable): password to free
  *
  * Clear the memory used by a password, and then free it.
  *
  * This function must be used to free nonpageable memory returned by
- * secret_password_lookup_nonpageable_finish(),
- * secret_password_lookup_nonpageable_sync() or
- * secret_password_lookupv_nonpageable_sync().
+ * [func@password_lookup_nonpageable_finish],
+ * [func@password_lookup_nonpageable_sync] or
+ * [func@password_lookupv_nonpageable_sync].
  */
 void
 secret_password_free (gchar *password)
@@ -1753,7 +1740,7 @@ secret_password_free (gchar *password)
 
 /**
  * secret_password_wipe:
- * @password: (allow-none): password to clear
+ * @password: (nullable): password to clear
  *
  * Clear the memory used by a password.
  */
