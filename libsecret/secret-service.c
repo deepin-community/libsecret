@@ -34,8 +34,11 @@
  *
  * A proxy object representing the Secret Service.
  *
- * A #SecretService object represents the Secret Service implementation which
- * runs as a D-Bus service.
+ * A #SecretService object either represents an implementation of the
+ * [`org.freedesktop.Secret`](https://specifications.freedesktop.org/secret-service/latest/)
+ * D-Bus service or a file that is encrypted using a master secret that was
+ * provided by the
+ * [secret portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Secret.html).
  *
  * Normally a single #SecretService object can be shared between multiple
  * callers. The [func@Service.get] method is used to access this #SecretService
@@ -75,10 +78,10 @@
 /**
  * SecretServiceClass:
  * @parent_class: the parent class
- * @collection_gtype: the [alias@GLib.Type] of the [class@Collection] objects instantiated
- *   by the #SecretService proxy
- * @item_gtype: the [alias@GLib.Type] of the [class@Item] objects instantiated by the
- *   #SecretService proxy
+ * @collection_gtype: the [alias@GObject.Type] of the [class@Collection] objects
+ *   instantiated by the #SecretService proxy
+ * @item_gtype: the [alias@GObject.Type] of the [class@Item] objects
+ *   instantiated by the #SecretService proxy
  * @prompt_async: called to perform asynchronous prompting when necessary
  * @prompt_finish: called to complete an asynchronous prompt operation
  * @prompt_sync: called to perform synchronous prompting when necessary
@@ -438,6 +441,7 @@ secret_service_signal (GDBusProxy *proxy,
 	 */
 
 	paths = g_dbus_proxy_get_cached_property (G_DBUS_PROXY (self), "Collections");
+	g_return_if_fail (paths != NULL);
 
 	/* A new collection was added, add it to the Collections property */
 	if (g_str_equal (signal_name, SECRET_SIGNAL_COLLECTION_CREATED)) {

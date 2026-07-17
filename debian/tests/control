@@ -1,6 +1,3 @@
 Tests: libsecret-1-dev
-Depends: build-essential,
-         dbus,
-         libsecret-1-dev,
-         pkg-config,
+Depends: build-essential, dbus, libsecret-1-dev, pkgconf
 Restrictions: allow-stderr superficial
