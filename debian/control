@@ -2,24 +2,28 @@ Source: libsecret
 Section: devel
 Priority: optional
 Maintainer: Debian GNOME Maintainers <pkg-gnome-maintainers@lists.alioth.debian.org>
-Uploaders: Emilio Pozuelo Monfort <pochu@debian.org>, Jeremy Bícha <jbicha@ubuntu.com>, Laurent Bigonville <bigon@debian.org>, Tim Lunn <tim@feathertop.org>
+Uploaders: Emilio Pozuelo Monfort <pochu@debian.org>,
+           Jeremy Bícha <jbicha@ubuntu.com>,
+           Laurent Bigonville <bigon@debian.org>,
+           Tim Lunn <tim@feathertop.org>
 Build-Depends: debhelper-compat (= 13),
                dh-sequence-gir,
                dh-sequence-gnome,
+               bash-completion,
+               dbus <!nocheck>,
                gi-docgen,
-               libglib2.0-dev (>= 2.44.0),
-               libglib2.0-doc (>= 2.44.0),
+               gjs [amd64 arm64 armhf mips64el mipsel ppc64el riscv64 s390x] <!nocheck>,
+               gtk-doc-tools (>= 1.9),
                libgcrypt20-dev (>= 1.2.2),
                libgirepository1.0-dev (>= 1.29),
+               libglib2.0-dev (>= 2.44.0),
+               libglib2.0-doc (>= 2.44.0),
                meson (>= 0.50.),
-               gtk-doc-tools (>= 1.9),
-               valac (>= 0.17.2.12),
                python3-dbus <!nocheck>,
                python3-gi <!nocheck>,
-               dbus <!nocheck>,
-               gjs [amd64 arm64 armel armhf i386 mips64el mipsel ppc64el riscv64 s390x] <!nocheck>
+               valac (>= 0.17.2.12)
 Rules-Requires-Root: no
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Vcs-Browser: https://salsa.debian.org/gnome-team/libsecret
 Vcs-Git: https://salsa.debian.org/gnome-team/libsecret.git
 Homepage: https://wiki.gnome.org/Projects/Libsecret
@@ -27,11 +31,13 @@ Homepage: https://wiki.gnome.org/Projects/Libsecret
 Package: libsecret-1-dev
 Architecture: any
 Section: libdevel
-Depends: libsecret-1-0 (= ${binary:Version}),
-         gir1.2-secret-1 (= ${binary:Version}),
+Depends: gir1.2-secret-1 (= ${binary:Version}),
          libgcrypt20-dev (>= 1.2.2),
          libglib2.0-dev (>= 2.44.0),
+         libsecret-1-0 (= ${binary:Version}),
+         ${gir:Depends},
          ${misc:Depends}
+Provides: ${gir:Provides}
 Multi-Arch: same
 Description: Secret store (development files)
  Library for storing and retrieving passwords and other secrets.
@@ -42,9 +48,7 @@ Description: Secret store (development files)
 Package: libsecret-1-0
 Section: libs
 Architecture: any
-Depends: ${misc:Depends},
-         ${shlibs:Depends},
-         libsecret-common
+Depends: libsecret-common, ${misc:Depends}, ${shlibs:Depends}
 Multi-Arch: same
 Description: Secret store
  Library for storing and retrieving passwords and other secrets.
@@ -64,8 +68,9 @@ Description: Secret store (common files)
 Package: libsecret-tools
 Section: admin
 Architecture: any
-Depends: ${shlibs:Depends},
-         ${misc:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Breaks: bash-completion (<< 1:2.16.0-7~)
+Replaces: bash-completion (<< 1:2.16.0-7~)
 Multi-Arch: foreign
 Description: tool for storing and retrieving GObject passwords
  This package provides a command line tool using libsecret to access
@@ -75,8 +80,7 @@ Description: tool for storing and retrieving GObject passwords
 Package: gir1.2-secret-1
 Section: introspection
 Architecture: any
-Depends: ${gir:Depends},
-         ${misc:Depends}
+Depends: ${gir:Depends}, ${misc:Depends}
 Multi-Arch: same
 Description: Secret store (GObject-Introspection)
  This package contains introspection data for libsecret, which can be used
